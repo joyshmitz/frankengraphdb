@@ -91,3 +91,255 @@ symbol = "g0_claims_e2e"
 kind = "script"
 artifact = "scripts/g0_claims_e2e.sh"
 status = "live"
+
+[[checker]]
+symbol = "g0_spine_e2e"
+kind = "script"
+artifact = "scripts/g0_spine_e2e.sh"
+status = "live"
+
+# --- Invariant-spine checker/negative-test stubs (fgdb-g0-invariant-spine).
+# --- Pre-Genesis: symbols are registered and resolvable; the implementing
+# --- oracles land with their workstreams (planned artifact paths recorded).
+# --- A clause may flip status stub -> live only in the same change that
+# --- lands its checker; CI's activation closure enforces the consequence.
+
+[[checker]]
+symbol = "fg_inv_01_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/txn_lifecycle.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_01_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/txn_lifecycle.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_02_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/ownership.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_02_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/ownership.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_03_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/version_chains.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_03_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/version_chains.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_04_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/visibility.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_04_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/visibility.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_05_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/ssi_history.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_05_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/ssi_history.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_06_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/witnesses.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_06_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/witnesses.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_07_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-ecs/src/registry_checker.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_07_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-ecs/src/registry_checker.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_08_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/sequence_contiguity.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_08_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/sequence_contiguity.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_09_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/identity.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_09_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/identity.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_10_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/root_publication.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_10_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/root_publication.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_11_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/allocation.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_11_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/allocation.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_12_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/scalar_rewrites.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_12_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/scalar_rewrites.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_13_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/branching.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_13_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/branching.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_14_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/gc_soundness.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_14_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/gc_soundness.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_15_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/derivatives.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_15_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/derivatives.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_16_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/obligations.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_16_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/obligations.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_17_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/merge_ladder.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_17_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-oracles/src/merge_ladder.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_18_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-reference/src/differential.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_18_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-reference/src/differential.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_19_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-observatory/src/replay_grades.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_19_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-observatory/src/replay_grades.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_20_core_checker"
+kind = "stub"
+artifact = "crates/fgdb-secure-view/src/pre_observation.rs"
+status = "stub"
+
+[[checker]]
+symbol = "fg_inv_20_core_negative"
+kind = "stub"
+artifact = "crates/fgdb-secure-view/src/pre_observation.rs"
+status = "stub"

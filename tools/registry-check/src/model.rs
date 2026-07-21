@@ -55,6 +55,9 @@ pub struct Clause {
     pub checker_entrypoint: String,
     pub negative_test_entrypoint: String,
     pub model_or_proof_scope: String,
+    /// The Appendix F enforcement column, verbatim: the apparatus (models,
+    /// oracles, campaigns) that will implement the checker entrypoints.
+    pub enforcement: Option<String>,
     pub proof_lane: Option<String>,
     pub owner: String,
     pub first_gate: String,
@@ -219,6 +222,7 @@ fn clause_from(t: &Table, ctx: &str) -> Result<Clause, ReadError> {
         checker_entrypoint: get_str(t, "checker_entrypoint", ctx)?,
         negative_test_entrypoint: get_str(t, "negative_test_entrypoint", ctx)?,
         model_or_proof_scope: get_str(t, "model_or_proof_scope", ctx)?,
+        enforcement: get_opt_str(t, "enforcement", ctx)?,
         proof_lane: get_opt_str(t, "proof_lane", ctx)?,
         owner: get_str(t, "owner", ctx)?,
         first_gate: get_str(t, "first_gate", ctx)?,
