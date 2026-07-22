@@ -1,0 +1,2191 @@
+# =============================================================================
+# appendix_a_catalog.toml — canonical Appendix A annotation and projection source
+# =============================================================================
+# Bead: fgdb-appendix-a-catalog-scaffold-gvvf
+#
+# The source manifest and slice table are complete. Schema/member annotations,
+# bindings, and status rows are added through A01-A21; a slice marked
+# `complete` must satisfy the full closure enforced by registry-check.
+# =============================================================================
+
+schema_version = 1
+
+[catalog]
+name = "appendix_a_catalog"
+catalog_epoch = 1
+row_id_grammar_version = 1
+canonical_order = "projection-registry,assigned-code,containing-schema,field-tag,arm-tag,row-id"
+diagnostic_version = 1
+hash_algorithm = "sha256"
+source_encoding = "utf-8-lf"
+
+[source_manifest]
+plan_path = "COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md"
+start_line = 1384
+end_line = 2654
+line_count = 1271
+byte_count = 950186
+sha256 = "a56ab455985cc8cabf66180b02fbd64fdb19a390b557be369f79f13a56e0d6b6"
+heading = "## Appendix A — On-Disk Object Formats (normative contract)"
+next_heading = "## Appendix B — Graph Intent Log (the semantic vocabulary)"
+
+[[slice]]
+ordinal = 1
+id = "a01"
+bead_id = "fgdb-a01-reference-roots-2k0q"
+title = "Appendix A exact catalog: Reference semantics, RootSlot, and RootBootstrap"
+start_line = 1384
+end_line = 1440
+line_count = 57
+byte_count = 23172
+sha256 = "102b572835f29cfa6b8ec5d22a5a2ef9a9c9cd8d0998f4136a914b031812b25b"
+predecessor = ""
+successor = "a02"
+expected_projection_classes = ["logical_object_kinds", "bootstrap_frames", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+# =============================================================================
+# Projection epochs — exact source registry epochs mirrored by this catalog.
+# =============================================================================
+
+[[projection_epoch]]
+registry = "logical_object_kinds"
+registry_epoch = 1
+
+[[projection_epoch]]
+registry = "physical_record_kinds"
+registry_epoch = 1
+
+[[projection_epoch]]
+registry = "bootstrap_frames"
+registry_epoch = 1
+
+[[projection_epoch]]
+registry = "prebootstrap_artifact_kinds"
+registry_epoch = 1
+
+[[projection_epoch]]
+registry = "wire_types"
+registry_epoch = 1
+
+[[projection_epoch]]
+registry = "durable_fields"
+registry_epoch = 1
+
+# =============================================================================
+# logical_object_kinds.toml — lossless catalog mirror.
+# =============================================================================
+
+[[logical_kind]]
+slice_id = "a03"
+row_id = "a03:logical-kind:logical-state-payload"
+object_kind = 0x0001
+name = "LogicalStatePayload"
+status = "active"
+construction_order = 20
+role_predicate = "true"
+max_size_bytes = 1073741824
+golden_corpus = "corpus/logical/logical_state_payload/"
+
+[[logical_kind]]
+slice_id = "a10"
+row_id = "a10:logical-kind:logical-command-record"
+object_kind = 0x0002
+name = "LogicalCommandRecord"
+status = "active"
+construction_order = 30
+role_predicate = "true"
+max_size_bytes = 1048576
+golden_corpus = "corpus/logical/logical_command_record/"
+
+[[logical_kind]]
+slice_id = "a03"
+row_id = "a03:logical-kind:logical-state-root"
+object_kind = 0x0003
+name = "LogicalStateRoot"
+status = "active"
+construction_order = 40
+role_predicate = "true"
+max_size_bytes = 65536
+golden_corpus = "corpus/logical/logical_state_root/"
+
+[[logical_kind]]
+slice_id = "a10"
+row_id = "a10:logical-kind:commit-command"
+object_kind = 0x0004
+name = "CommitCommand"
+status = "active"
+construction_order = 10
+role_predicate = "true"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/commit_command/"
+
+[[logical_kind]]
+slice_id = "a10"
+row_id = "a10:logical-kind:control-command"
+object_kind = 0x0005
+name = "ControlCommand"
+status = "active"
+construction_order = 10
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/control_command/"
+
+[[logical_kind]]
+slice_id = "a11"
+row_id = "a11:logical-kind:commit-marker"
+object_kind = 0x0006
+name = "CommitMarker"
+status = "active"
+construction_order = 15
+role_predicate = "true"
+max_size_bytes = 4096
+golden_corpus = "corpus/logical/commit_marker/"
+
+[[logical_kind]]
+slice_id = "a04"
+row_id = "a04:logical-kind:root-manifest"
+object_kind = 0x0007
+name = "RootManifest"
+status = "active"
+construction_order = 40
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/root_manifest/"
+
+[[logical_kind]]
+slice_id = "g0"
+row_id = "g0:logical-kind:authority-binding-record"
+object_kind = 0x0008
+name = "AuthorityBindingRecord"
+status = "active"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+max_size_bytes = 65536
+golden_corpus = "corpus/logical/authority_binding_record/"
+
+[[logical_kind]]
+slice_id = "a06"
+row_id = "a06:logical-kind:checkpoint-state-vector"
+object_kind = 0x0009
+name = "CheckpointStateVector"
+status = "reserved"
+construction_order = 35
+role_predicate = "role-local"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/checkpoint_state_vector/"
+
+[[logical_kind]]
+slice_id = "g0"
+row_id = "g0:logical-kind:commit-capsule"
+object_kind = 0x000a
+name = "CommitCapsule"
+status = "active"
+construction_order = 10
+role_predicate = "true"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/commit_capsule/"
+
+[[logical_kind]]
+slice_id = "a10"
+row_id = "a10:logical-kind:prepared-commit-record"
+object_kind = 0x000b
+name = "PreparedCommitRecord"
+status = "active"
+construction_order = 12
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/prepared_commit_record/"
+
+[[logical_kind]]
+slice_id = "a19"
+row_id = "a19:logical-kind:recovery-bridge-spec"
+object_kind = 0x000c
+name = "RecoveryBridgeSpec"
+status = "reserved"
+construction_order = 10
+role_predicate = "restore-machinery"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/recovery_bridge_spec/"
+
+[[logical_kind]]
+slice_id = "a04"
+row_id = "a04:logical-kind:raft-snapshot-local"
+object_kind = 0x0101
+name = "RaftSnapshotLocal"
+status = "reserved"
+construction_order = 40
+role_predicate = "role-local"
+max_size_bytes = 1073741824
+golden_corpus = "corpus/logical/raft_snapshot_local/"
+
+[[logical_kind]]
+slice_id = "a04"
+row_id = "a04:logical-kind:raft-snapshot-meta"
+object_kind = 0x0102
+name = "RaftSnapshotMeta"
+status = "reserved"
+construction_order = 40
+role_predicate = "role-meta"
+max_size_bytes = 1073741824
+golden_corpus = "corpus/logical/raft_snapshot_meta/"
+
+[[logical_kind]]
+slice_id = "a04"
+row_id = "a04:logical-kind:raft-snapshot-shard"
+object_kind = 0x0103
+name = "RaftSnapshotShard"
+status = "reserved"
+construction_order = 40
+role_predicate = "role-shard"
+max_size_bytes = 1073741824
+golden_corpus = "corpus/logical/raft_snapshot_shard/"
+
+[[logical_kind]]
+slice_id = "a04"
+row_id = "a04:logical-kind:root-manifest-meta"
+object_kind = 0x0104
+name = "RootManifestMeta"
+status = "reserved"
+construction_order = 40
+role_predicate = "role-meta"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/root_manifest_meta/"
+
+[[logical_kind]]
+slice_id = "a04"
+row_id = "a04:logical-kind:root-manifest-shard"
+object_kind = 0x0105
+name = "RootManifestShard"
+status = "reserved"
+construction_order = 40
+role_predicate = "role-shard"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/root_manifest_shard/"
+
+[[logical_kind]]
+slice_id = "a06"
+row_id = "a06:logical-kind:checkpoint-state-vector-meta"
+object_kind = 0x0106
+name = "CheckpointStateVectorMeta"
+status = "reserved"
+construction_order = 35
+role_predicate = "role-meta"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/checkpoint_state_vector_meta/"
+
+[[logical_kind]]
+slice_id = "a06"
+row_id = "a06:logical-kind:checkpoint-state-vector-shard"
+object_kind = 0x0107
+name = "CheckpointStateVectorShard"
+status = "reserved"
+construction_order = 35
+role_predicate = "role-shard"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/checkpoint_state_vector_shard/"
+
+[[logical_kind]]
+slice_id = "g0"
+row_id = "g0:logical-kind:meta-authority-binding-projection"
+object_kind = 0x0108
+name = "MetaAuthorityBindingProjection"
+status = "reserved"
+construction_order = 10
+role_predicate = "role-meta"
+max_size_bytes = 65536
+golden_corpus = "corpus/logical/meta_authority_binding_projection/"
+
+[[logical_kind]]
+slice_id = "a07"
+row_id = "a07:logical-kind:shard-authority-binding-projection"
+object_kind = 0x0109
+name = "ShardAuthorityBindingProjection"
+status = "reserved"
+construction_order = 10
+role_predicate = "role-shard"
+max_size_bytes = 65536
+golden_corpus = "corpus/logical/shard_authority_binding_projection/"
+
+[[logical_kind]]
+slice_id = "g0"
+row_id = "g0:logical-kind:meta-applied-result"
+object_kind = 0x010a
+name = "MetaAppliedResult"
+status = "reserved"
+construction_order = 20
+role_predicate = "role-meta"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/meta_applied_result/"
+
+[[logical_kind]]
+slice_id = "g0"
+row_id = "g0:logical-kind:shard-protocol-evidence"
+object_kind = 0x010b
+name = "ShardProtocolEvidence"
+status = "reserved"
+construction_order = 20
+role_predicate = "role-shard"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_protocol_evidence/"
+
+[[logical_kind]]
+slice_id = "a06"
+row_id = "a06:logical-kind:shard-history-inventory"
+object_kind = 0x010c
+name = "ShardHistoryInventory"
+status = "reserved"
+construction_order = 35
+role_predicate = "role-shard"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/shard_history_inventory/"
+
+[[logical_kind]]
+slice_id = "a06"
+row_id = "a06:logical-kind:global-key-envelope-manifest"
+object_kind = 0x010d
+name = "GlobalKeyEnvelopeManifest"
+status = "reserved"
+construction_order = 35
+role_predicate = "role-meta"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/global_key_envelope_manifest/"
+
+[[logical_kind]]
+slice_id = "a15"
+row_id = "a15:logical-kind:backup-manifest-body"
+object_kind = 0x010e
+name = "BackupManifestBody"
+status = "reserved"
+construction_order = 35
+role_predicate = "true"
+max_size_bytes = 268435456
+golden_corpus = "corpus/logical/backup_manifest_body/"
+
+[[logical_kind]]
+slice_id = "a15"
+row_id = "a15:logical-kind:backup-manifest-signature-set"
+object_kind = 0x010f
+name = "BackupManifestSignatureSet"
+status = "reserved"
+construction_order = 36
+role_predicate = "true"
+max_size_bytes = 1048576
+golden_corpus = "corpus/logical/backup_manifest_signature_set/"
+
+[[logical_kind]]
+slice_id = "a15"
+row_id = "a15:logical-kind:backup-manifest"
+object_kind = 0x0110
+name = "BackupManifest"
+status = "reserved"
+construction_order = 37
+role_predicate = "true"
+max_size_bytes = 1048576
+golden_corpus = "corpus/logical/backup_manifest/"
+
+[[slice]]
+ordinal = 2
+id = "a02"
+bead_id = "fgdb-a02-filesystem-cipher-dsi3"
+title = "Appendix A exact catalog: Filesystem, cipher, encoding, placement, and symbols"
+start_line = 1441
+end_line = 1459
+line_count = 19
+byte_count = 5157
+sha256 = "f11543ab928994a39eeeee6e7154e75375e94f82a2e2b1640401d70c27a330d2"
+predecessor = "a01"
+successor = "a03"
+expected_projection_classes = ["physical_record_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 3
+id = "a03"
+bead_id = "fgdb-a03-local-state-txn-rxjg"
+title = "Appendix A exact catalog: Local logical state and durable transaction formats"
+start_line = 1460
+end_line = 1537
+line_count = 78
+byte_count = 66780
+sha256 = "c7602e569223eed2b230de305ed40f16f11f52670f97b2e5ca94fef3bf4824e6"
+predecessor = "a02"
+successor = "a04"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 4
+id = "a04"
+bead_id = "fgdb-a04-manifest-raft-4tgi"
+title = "Appendix A exact catalog: RootManifest, configuration, Raft, and cross-group trust prelude"
+start_line = 1538
+end_line = 1583
+line_count = 46
+byte_count = 30907
+sha256 = "ecd43f46a9ffd2be372922bf81bf589ab625778eef10d5d13828aa5939b37c2d"
+predecessor = "a03"
+successor = "a05"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 5
+id = "a05"
+bead_id = "fgdb-a05-w12-role-transition-wjj2"
+title = "Appendix A exact catalog: W12 Genesis, role transition, and activation formats"
+start_line = 1584
+end_line = 1652
+line_count = 69
+byte_count = 59030
+sha256 = "8f11565a0d29d115bbd4919b3ccbd808a2b0319ebf635c380b599a7010c8856d"
+predecessor = "a04"
+successor = "a06"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 6
+id = "a06"
+bead_id = "fgdb-a06-w12-core-zdzx"
+title = "Appendix A exact catalog: W12 Meta and Shard semantic core formats"
+start_line = 1653
+end_line = 1694
+line_count = 42
+byte_count = 38061
+sha256 = "18baef688b553fcb72987e546f95138b598f32a1389eeb72426a5f925684496e"
+predecessor = "a05"
+successor = "a07"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 7
+id = "a07"
+bead_id = "fgdb-a07-w12-txn-results-yt4z"
+title = "Appendix A exact catalog: W12 transaction, statement, result, and outcome formats"
+start_line = 1695
+end_line = 1784
+line_count = 90
+byte_count = 86794
+sha256 = "386e56f68638c6054ebc7cc30f9c33c0a708f88fb100eab6b21cc425f5b6056a"
+predecessor = "a06"
+successor = "a08"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 8
+id = "a08"
+bead_id = "fgdb-a08-w12-lifecycle-pr7j"
+title = "Appendix A exact catalog: W12 retention, compaction, reconfiguration, GC, and topology formats"
+start_line = 1785
+end_line = 1883
+line_count = 99
+byte_count = 92121
+sha256 = "9bee4c412d4ebb7df1d274528aa0b8e82033d1fb052db3b1a7e08bf4461f2481"
+predecessor = "a07"
+successor = "a09"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 9
+id = "a09"
+bead_id = "fgdb-a09-storage-identity-02tl"
+title = "Appendix A exact catalog: Strata run, identity continuity, allocator, and lease formats"
+start_line = 1884
+end_line = 1903
+line_count = 20
+byte_count = 12328
+sha256 = "eea5d9f7257bfefee5cae1077bbe3f17d4948267736dcd79e24d530f2a1873df"
+predecessor = "a08"
+successor = "a10"
+expected_projection_classes = ["logical_object_kinds", "physical_record_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 10
+id = "a10"
+bead_id = "fgdb-a10-command-delta-ooy1"
+title = "Appendix A exact catalog: Committed effects, commands, and logical delta formats"
+start_line = 1904
+end_line = 1925
+line_count = 22
+byte_count = 16579
+sha256 = "7bad384e377f49ef7d102eefda083260874790f6af47f85d0b344ea4c0854e9e"
+predecessor = "a09"
+successor = "a11"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 11
+id = "a11"
+bead_id = "fgdb-a11-delivery-markers-sdh6"
+title = "Appendix A exact catalog: Delivery cursors, envelopes, markers, and physical batching"
+start_line = 1926
+end_line = 1957
+line_count = 32
+byte_count = 7290
+sha256 = "19d0983f080d27922bf566a2973504bf2b60fc75b3902ecbe0e1c8396015bdaf"
+predecessor = "a10"
+successor = "a12"
+expected_projection_classes = ["logical_object_kinds", "physical_record_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 12
+id = "a12"
+bead_id = "fgdb-a12-checkpoint-resources-m9jz"
+title = "Appendix A exact catalog: Checkpoint, retention, constraint, and resource formats"
+start_line = 1958
+end_line = 1993
+line_count = 36
+byte_count = 19488
+sha256 = "1d9f07d6ccc7c5feb548224d9e5f38ef216143c1dfd63f95ebcf6e84907b76c6"
+predecessor = "a11"
+successor = "a13"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 13
+id = "a13"
+bead_id = "fgdb-a13-branch-merge-g2ko"
+title = "Appendix A exact catalog: Branch manifest, key grants, retirement, and merge formats"
+start_line = 1994
+end_line = 2028
+line_count = 35
+byte_count = 17149
+sha256 = "1901c5bda19eb47aba710870dc0bd87c2184b4142f5ed51d6b8db732401031f8"
+predecessor = "a12"
+successor = "a14"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 14
+id = "a14"
+bead_id = "fgdb-a14-ha-payload-gc-jb82"
+title = "Appendix A exact catalog: Payload availability, configuration floors, and GC epoch formats"
+start_line = 2029
+end_line = 2050
+line_count = 22
+byte_count = 17540
+sha256 = "de90db8cd87f7b9c4b168ed9357580ffb8e9c64f60ef643ba48f872daf566e93"
+predecessor = "a13"
+successor = "a15"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 15
+id = "a15"
+bead_id = "fgdb-a15-key-backup-n77c"
+title = "Appendix A exact catalog: Key destruction, backup, publication, and release formats"
+start_line = 2051
+end_line = 2150
+line_count = 100
+byte_count = 79596
+sha256 = "d68ac8d8b85c3bf56b836b34430d4fac668418d07f186cdcb01c6e4838ac828e"
+predecessor = "a14"
+successor = "a16"
+expected_projection_classes = ["logical_object_kinds", "prebootstrap_artifact_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 16
+id = "a16"
+bead_id = "fgdb-a16-time-authority-ytub"
+title = "Appendix A exact catalog: Rollback-protected authority-time formats and rotation"
+start_line = 2151
+end_line = 2240
+line_count = 90
+byte_count = 69768
+sha256 = "9fc751b96c0539ad956995a3e0bde2fe71e58fe4103aa80cbce9d1c687273427"
+predecessor = "a15"
+successor = "a17"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 17
+id = "a17"
+bead_id = "fgdb-a17-restore-prebootstrap-hy9w"
+title = "Appendix A exact catalog: Restore prebootstrap journal and source acquisition formats"
+start_line = 2241
+end_line = 2342
+line_count = 102
+byte_count = 72597
+sha256 = "660aaee44fbc117b6f49156c9f95ec3e1843d9ae171e54f4e08daf435c456cd5"
+predecessor = "a16"
+successor = "a18"
+expected_projection_classes = ["logical_object_kinds", "prebootstrap_artifact_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 18
+id = "a18"
+bead_id = "fgdb-a18-restore-registry-exjt"
+title = "Appendix A exact catalog: Restore registry, cleanup, terminal history, and abandonment formats"
+start_line = 2343
+end_line = 2452
+line_count = 110
+byte_count = 94976
+sha256 = "5fc84607d338774d06f4dcd1a0aed6f48165f427c7da4716b90d4bbbc949161c"
+predecessor = "a17"
+successor = "a19"
+expected_projection_classes = ["logical_object_kinds", "prebootstrap_artifact_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 19
+id = "a19"
+bead_id = "fgdb-a19-restore-readiness-fd0j"
+title = "Appendix A exact catalog: Restore lease barrier, reservations, bridge, and readiness formats"
+start_line = 2453
+end_line = 2568
+line_count = 116
+byte_count = 77017
+sha256 = "65c5015fa2243b33579d5b1b6d78ac3e0d55f9b0fcc10c482bbc02a2ebd4d9c0"
+predecessor = "a18"
+successor = "a20"
+expected_projection_classes = ["logical_object_kinds", "prebootstrap_artifact_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 20
+id = "a20"
+bead_id = "fgdb-a20-restore-promotion-ivsp"
+title = "Appendix A exact catalog: Restore promotion, independent reopen, completion, and release formats"
+start_line = 2569
+end_line = 2602
+line_count = 34
+byte_count = 22805
+sha256 = "6f1b942c046041d3ecefb159e0e86b30a673f03ca86b44dac921ad98ef07a064"
+predecessor = "a19"
+successor = "a21"
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+[[slice]]
+ordinal = 21
+id = "a21"
+bead_id = "fgdb-a21-replay-security-ye0o"
+title = "Appendix A exact catalog: Replay, authorization, capability, DP, audit, and transparency formats"
+start_line = 2603
+end_line = 2654
+line_count = 52
+byte_count = 41031
+sha256 = "fdf6e10777e4c3ed64b0a54cf78b504757bf1456840cca7ac90b12ca7231e89b"
+predecessor = "a20"
+successor = ""
+expected_projection_classes = ["logical_object_kinds", "wire_types", "durable_fields"]
+definition_status = "declared"
+
+# =============================================================================
+# physical_record_kinds.toml — lossless catalog mirror.
+# =============================================================================
+
+[[physical_kind]]
+slice_id = "a02"
+row_id = "a02:physical-kind:ciphertext-record"
+record_kind = 0x0001
+name = "CiphertextRecord"
+identity_law = "ciphertext_id"
+status = "active"
+transcript = "cipher descriptor (excludes FEC/placement) ‖ ciphertext ‖ profile-sized object tag; AAD binds ObjectId and CipherDescriptorWithoutDigest"
+owning_identity = "ObjectId (via AEAD AAD)"
+max_size_bytes = 1073741824
+
+[[physical_kind]]
+slice_id = "a02"
+row_id = "a02:physical-kind:encoding-record"
+record_kind = 0x0002
+name = "EncodingRecord"
+identity_law = "encoding_id"
+status = "active"
+transcript = "BLAKE3(\"fgdb:encoding:v1\" ‖ canonical(EncodingDescriptorWithoutId))"
+owning_identity = "CiphertextId"
+max_size_bytes = 65536
+
+[[physical_kind]]
+slice_id = "a02"
+row_id = "a02:physical-kind:placement-record"
+record_kind = 0x0003
+name = "PlacementRecord"
+identity_law = "placement_id"
+status = "active"
+transcript = "BLAKE3(\"fgdb:placement:v1\" ‖ canonical(PlacementDescriptorWithoutId)); location_form is one contiguous span with authenticated symbol-inventory digest or an explicit canonical symbol/locator inventory"
+owning_identity = "EncodingId"
+max_size_bytes = 16777216
+
+[[physical_kind]]
+slice_id = "a02"
+row_id = "a02:physical-kind:symbol-record"
+record_kind = 0x0004
+name = "SymbolRecord"
+identity_law = "symbol_record"
+status = "active"
+transcript = "domain/version ‖ every serialized header field except the MAC bytes (framing lengths, identities, object kind, source block, ESI, transfer length, OTI, flags, auth profile, payload length) ‖ payload; MAC under K_symbol = KDF(DEK, \"fgdb:symbol-auth:v1\" ‖ EncodingId)"
+owning_identity = "EncodingId (coordinate-keyed)"
+max_size_bytes = 1048576
+
+[[physical_kind]]
+slice_id = "g0"
+row_id = "g0:physical-kind:metadata-tree-locator-entry"
+record_kind = 0x0005
+name = "MetadataTreeLocatorEntry"
+identity_law = "locator_entry"
+status = "active"
+transcript = "authenticated (member_oid -> pack_encoding, offset, length); nonretaining"
+owning_identity = "containing metadata tree"
+max_size_bytes = 4096
+
+[[physical_kind]]
+slice_id = "g0"
+row_id = "g0:physical-kind:packed-object-group"
+record_kind = 0x0006
+name = "PackedObjectGroup"
+identity_law = "pack"
+status = "active"
+transcript = "length-delimited canonical plaintext bytes of member logical objects; one compress/AEAD/FEC/placement pipeline owned by the pack; homogeneous in write-key domain, tenant/authority domain, and retention/floor class"
+owning_identity = "member ObjectIds (each verified over its own canonical plaintext)"
+max_size_bytes = 1073741824
+
+[[physical_kind]]
+slice_id = "a11"
+row_id = "a11:physical-kind:marker-batch"
+record_kind = 0x0007
+name = "MarkerBatch"
+identity_law = "pack"
+status = "active"
+transcript = "PackedObjectGroup specialization: length-delimited CommitMarker bytes; object-location index maps each marker OID to its authenticated (batch_encoding, offset, length) subobject locator"
+owning_identity = "member CommitMarker ObjectIds"
+max_size_bytes = 268435456
+
+# =============================================================================
+# bootstrap_frames.toml — lossless catalog mirror.
+# =============================================================================
+
+[[bootstrap_frame]]
+slice_id = "a01"
+row_id = "a01:bootstrap-frame:root-slot"
+frame_kind = 0x0001
+name = "RootSlot"
+status = "active"
+byte_size = 4096
+location = "manifest.root, two fixed 4 KiB slots (the only in-place-updated published bytes)"
+update_protocol = "two-slot alternation: write the losing slot, fsync, publish by slot_generation; recovery selects the highest structurally credible authenticated role closure (FG-INV-10)"
+tear_validation = "trailing tear_checksum over the complete slot bytes; a torn slot is structurally incredible and loses selection"
+opener_fields = "RootBootstrap: complete CipherDescriptorWithoutDigest, EncodingDescriptorWithoutId, CiphertextId, EncodingId, ciphertext digest, specialized ContiguousSpan placement descriptor, noncircular opener bundle for root DEK and K_oid (inline wrapped keys or authenticated KMS/HSM locators plus wrap digests); no descriptor or identity-key field comes from the object being opened"
+compatibility_gate = "recovery rejects a root whose authenticated namespace/database/incarnation/continuity/profile/visibility tuple disagrees with the slot; durable-format writes only under an activated FormatCompatibilityState (FG-INV-10)"
+recovery_vectors = "corpus/bootstrap/root_slot/"
+
+[[bootstrap_frame]]
+slice_id = "g0"
+row_id = "g0:bootstrap-frame:raft-hard-frame"
+frame_kind = 0x0002
+name = "RaftHardFrame"
+status = "reserved"
+byte_size = 4096
+location = "reserved: fixed-location Raft hard-state frame (registered here per §5.1's 'any future registered bootstrap frame'; schema lands with fgdb-w2/aegis beads)"
+update_protocol = "reserved"
+tear_validation = "reserved"
+opener_fields = "reserved"
+compatibility_gate = "reserved"
+recovery_vectors = "corpus/bootstrap/raft_hard_frame/"
+
+# =============================================================================
+# prebootstrap_artifact_kinds.toml — lossless catalog mirror.
+# =============================================================================
+
+[[prebootstrap_kind]]
+slice_id = "a17"
+row_id = "a17:prebootstrap-kind:portable-restore-plan-artifact"
+artifact_kind = 0x0001
+name = "PortableRestorePlanArtifact"
+status = "reserved"
+target_claim_domain = "restore plan/claim domain (a17)"
+allowed_containers = "registered restore staging inode/root/capsule only"
+import_target = "canonical restore plan logical object (a17)"
+max_size_bytes = 16777216
+
+[[prebootstrap_kind]]
+slice_id = "a17"
+row_id = "a17:prebootstrap-kind:restore-status-receipt-artifact"
+artifact_kind = 0x0002
+name = "RestoreStatusReceiptArtifact"
+status = "reserved"
+target_claim_domain = "restore status/receipt/refusal domain (a17/a18)"
+allowed_containers = "registered restore staging inode/root/capsule only"
+import_target = "canonical restore terminal-history logical object (a18)"
+max_size_bytes = 1048576
+
+[[prebootstrap_kind]]
+slice_id = "a17"
+row_id = "a17:prebootstrap-kind:availability-certificate-artifact"
+artifact_kind = 0x0003
+name = "AvailabilityCertificateArtifact"
+status = "reserved"
+target_claim_domain = "source availability-certificate domain (a17)"
+allowed_containers = "registered restore staging inode/root/capsule only"
+import_target = "canonical availability-evidence logical object (a17)"
+max_size_bytes = 1048576
+
+[[prebootstrap_kind]]
+slice_id = "a15"
+row_id = "a15:prebootstrap-kind:wrapped-key-artifact"
+artifact_kind = 0x0004
+name = "WrappedKeyArtifact"
+status = "reserved"
+target_claim_domain = "key-recovery claim domain (a15/a19); wrapped keys and wrap digests only — never plaintext keys"
+allowed_containers = "registered restore staging inode/root/capsule only"
+import_target = "canonical key-envelope logical object (a15)"
+max_size_bytes = 65536
+
+[[prebootstrap_kind]]
+slice_id = "g0"
+row_id = "g0:prebootstrap-kind:pre-bootstrap-terminal-import-artifact"
+artifact_kind = 0x0005
+name = "PreBootstrapTerminalImportArtifact"
+status = "reserved"
+target_claim_domain = "prebootstrap dispatch terminal-import domain (g0-irreversible-dispatch, a17)"
+allowed_containers = "registered restore staging inode/root/capsule only"
+import_target = "contract-specific canonical import record (g0-irreversible-dispatch)"
+max_size_bytes = 16777216
+
+# =============================================================================
+# wire_types.toml — lossless catalog mirror.
+# =============================================================================
+
+[[wire_type]]
+slice_id = "a01"
+row_id = "a01:wire-type:strong-ref"
+wire_type_id = 0x0001
+name = "StrongRef"
+kind = "reference_wrapper"
+status = "active"
+encoding_context = "typed strong reference to one registered top-level logical schema; a field using the bare wrapper MUST declare a concrete target_schema_id — polymorphic targets require a generated reference union"
+allowed_containing_schemas = ["*"]
+max_size_bytes = 40
+
+[[wire_type]]
+slice_id = "a01"
+row_id = "a01:wire-type:conditional-command-ref"
+wire_type_id = 0x0002
+name = "ConditionalCommandRef"
+kind = "reference_wrapper"
+status = "active"
+encoding_context = "conditional (cuttable) reference to the predecessor LogicalCommandRecord; retention governed by checkpoint cuts (FG-INV-14)"
+allowed_containing_schemas = ["LocalCommandOrigin"]
+max_size_bytes = 40
+
+[[wire_type]]
+slice_id = "a01"
+row_id = "a01:wire-type:weak-digest"
+wire_type_id = 0x0003
+name = "WeakDigest"
+kind = "record"
+status = "active"
+encoding_context = "256-bit weak-identity digest; never a reachability edge"
+allowed_containing_schemas = ["*"]
+max_size_bytes = 32
+
+[[wire_type]]
+slice_id = "a01"
+row_id = "a01:wire-type:marker-ref"
+wire_type_id = 0x0004
+name = "MarkerRef"
+kind = "record"
+status = "active"
+encoding_context = "{marker_oid, commit_seq}: the transaction-history identity used by branch heads, version origins/retirements, checkpoints, MMR leaves, and merges"
+allowed_containing_schemas = ["*"]
+max_size_bytes = 48
+
+[[wire_type]]
+slice_id = "a01"
+row_id = "a01:wire-type:strong-marker-ref"
+wire_type_id = 0x0005
+name = "StrongMarkerRef"
+kind = "reference_wrapper"
+status = "active"
+encoding_context = "strong reference to a CommitMarker via MarkerRef identity"
+allowed_containing_schemas = ["LogicalCommandRecord"]
+max_size_bytes = 48
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:local-command-origin"
+wire_type_id = 0x0006
+name = "LocalCommandOrigin"
+kind = "union"
+status = "active"
+encoding_context = "closed union: Prior | RecoveryBridge; normal work requires Prior; only the first guarded restore command may use RecoveryBridge"
+allowed_containing_schemas = ["LogicalCommandRecord"]
+max_size_bytes = 128
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:local-command-origin-prior"
+wire_type_id = 0x0007
+name = "LocalCommandOrigin.Prior"
+kind = "union_variant"
+status = "active"
+containing_union = "LocalCommandOrigin"
+wire_tag = 0x0001
+encoding_context = "{predecessor: ConditionalCommandRef}"
+allowed_containing_schemas = ["LocalCommandOrigin"]
+max_size_bytes = 48
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:local-command-origin-recovery-bridge"
+wire_type_id = 0x0008
+name = "LocalCommandOrigin.RecoveryBridge"
+kind = "union_variant"
+status = "active"
+containing_union = "LocalCommandOrigin"
+wire_tag = 0x0002
+encoding_context = "{bridge_spec_ref: StrongRef<RecoveryBridgeSpec>, source_manifest_identity: WeakDigest, transform_and_projection_digest}"
+allowed_containing_schemas = ["LocalCommandOrigin"]
+max_size_bytes = 128
+
+[[wire_type]]
+slice_id = "a01"
+row_id = "a01:wire-type:root-bootstrap"
+wire_type_id = 0x0009
+name = "RootBootstrap"
+kind = "record"
+status = "active"
+encoding_context = "everything needed before the object-location index exists: complete cipher/encoding descriptors, CiphertextId/EncodingId/ciphertext digest, specialized ContiguousSpan placement, noncircular opener bundle for root DEK and K_oid; no descriptor or identity-key field comes from the object being opened"
+allowed_containing_schemas = ["RootSlot"]
+max_size_bytes = 3584
+
+[[wire_type]]
+slice_id = "a02"
+row_id = "a02:wire-type:contiguous-span"
+wire_type_id = 0x000a
+name = "ContiguousSpan"
+kind = "record"
+status = "active"
+encoding_context = "specialized placement descriptor: placement epoch, failure-domain policy and domain ID, segment/offset/length, symbol-inventory digest"
+allowed_containing_schemas = ["RootBootstrap", "PlacementRecord"]
+max_size_bytes = 256
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:dispatch-origin-plane"
+wire_type_id = 0x000b
+name = "DispatchOriginPlane"
+kind = "discriminant"
+status = "active"
+encoding_context = "closed tag: CanonicalProtocol | RestorePreBootstrap (g0-irreversible-dispatch owns the dispatch registries)"
+allowed_containing_schemas = ["*"]
+max_size_bytes = 2
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:dispatch-origin-plane-canonical-protocol"
+wire_type_id = 0x000c
+name = "DispatchOriginPlane.CanonicalProtocol"
+kind = "union_variant"
+status = "active"
+containing_union = "DispatchOriginPlane"
+wire_tag = 0x0001
+encoding_context = "canonical Protocol-plane origin"
+allowed_containing_schemas = ["DispatchOriginPlane"]
+max_size_bytes = 2
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:dispatch-origin-plane-restore-pre-bootstrap"
+wire_type_id = 0x000d
+name = "DispatchOriginPlane.RestorePreBootstrap"
+kind = "union_variant"
+status = "active"
+containing_union = "DispatchOriginPlane"
+wire_tag = 0x0002
+encoding_context = "restore pre-bootstrap origin; never mutates into canonical for the same action"
+allowed_containing_schemas = ["DispatchOriginPlane"]
+max_size_bytes = 2
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:authority-bound-header"
+wire_type_id = 0x000e
+name = "AuthorityBoundHeader"
+kind = "record"
+status = "active"
+encoding_context = "{authority_binding_ref: AuthorityBindingRef<Role>, authority_digest, security_policy_epoch, revocation_index}; every repeated value must byte-match the AuthorityBindingRecord"
+allowed_containing_schemas = ["*"]
+max_size_bytes = 256
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:security-state-binding"
+wire_type_id = 0x000f
+name = "SecurityStateBinding"
+kind = "record"
+status = "reserved"
+encoding_context = "complete security-state binding (schema lands with warden/w9 beads; FG-INV-20)"
+allowed_containing_schemas = ["AuthorityBindingRecord"]
+max_size_bytes = 1024
+
+[[wire_type]]
+slice_id = "a17"
+row_id = "a17:wire-type:pre-bootstrap-artifact-ref"
+wire_type_id = 0x0010
+name = "PreBootstrapArtifactRef"
+kind = "reference_wrapper"
+status = "active"
+encoding_context = "{artifact_id, authenticated_staging_locator, length, canonical_digest, dispatch_root_generation}; legal ONLY in the registered restore staging inode/root/capsule; never a StrongRef, never in the mark set"
+allowed_containing_schemas = ["restore-staging"]
+max_size_bytes = 128
+
+[[wire_type]]
+slice_id = "g0"
+row_id = "g0:wire-type:hlc-timestamp"
+wire_type_id = 0x0011
+name = "HlcTimestamp"
+kind = "record"
+status = "active"
+encoding_context = "hybrid logical clock instant (asupersync HLC encoding)"
+allowed_containing_schemas = ["*"]
+max_size_bytes = 16
+
+# =============================================================================
+# durable_fields.toml fields — lossless catalog mirror.
+# =============================================================================
+
+[[field]]
+slice_id = "a03"
+row_id = "a03:field:logical-state-payload-applied-logical-command-seq"
+containing_schema = "LogicalStatePayload"
+field_tag = 1
+stable_name = "applied_logical_command_seq"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 20
+role_predicate = "true"
+retention_and_cut_rule = "lives/dies with the payload object"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a03"
+row_id = "a03:field:logical-state-payload-applied-commit-seq"
+containing_schema = "LogicalStatePayload"
+field_tag = 2
+stable_name = "applied_commit_seq"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 20
+role_predicate = "true"
+retention_and_cut_rule = "lives/dies with the payload object"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:logical-command-record-logical-command-seq"
+containing_schema = "LogicalCommandRecord"
+field_tag = 1
+stable_name = "logical_command_seq"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 30
+role_predicate = "true"
+retention_and_cut_rule = "contiguity anchor (FG-INV-08); retained until checkpoint cut"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:logical-command-record-origin"
+containing_schema = "LogicalCommandRecord"
+field_tag = 2
+stable_name = "origin"
+exact_wire_type = "LocalCommandOrigin"
+cardinality = "one"
+identity_class = "inline"
+reference_semantics = "none"
+construction_order = 30
+role_predicate = "true"
+retention_and_cut_rule = "Prior's ConditionalCommandRef is cut at checkpoint boundaries; RecoveryBridge only in the first guarded restore command"
+version_status = "active"
+max_size_bytes = 128
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:logical-command-record-command"
+containing_schema = "LogicalCommandRecord"
+field_tag = 3
+stable_name = "command"
+exact_wire_type = "CommandRef"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "strong"
+construction_order = 30
+role_predicate = "true"
+retention_and_cut_rule = "strong until checkpoint suffix retirement (FG-INV-14)"
+version_status = "active"
+max_size_bytes = 48
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:logical-command-record-transaction-marker"
+containing_schema = "LogicalCommandRecord"
+field_tag = 4
+stable_name = "transaction_marker"
+exact_wire_type = "StrongMarkerRef"
+cardinality = "optional"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "CommitMarker"
+construction_order = 30
+role_predicate = "true"
+retention_and_cut_rule = "marker subsequence is independently addressable (FG-INV-08)"
+version_status = "active"
+max_size_bytes = 48
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:logical-command-record-logical-command-hlc"
+containing_schema = "LogicalCommandRecord"
+field_tag = 5
+stable_name = "logical_command_hlc"
+exact_wire_type = "HlcTimestamp"
+cardinality = "one"
+identity_class = "inline"
+reference_semantics = "none"
+construction_order = 30
+role_predicate = "true"
+retention_and_cut_rule = "lives/dies with the record"
+version_status = "active"
+max_size_bytes = 16
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:logical-command-record-resulting-state-payload-digest"
+containing_schema = "LogicalCommandRecord"
+field_tag = 6
+stable_name = "resulting_state_payload_digest"
+exact_wire_type = "WeakDigest"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "weak_digest"
+target_schema_id = "LogicalStatePayload"
+construction_order = 30
+role_predicate = "true"
+retention_and_cut_rule = "cross-checks the sibling object; NOT a reachability edge"
+version_status = "active"
+max_size_bytes = 32
+digest_class = "weak_identity"
+
+[[field]]
+slice_id = "a03"
+row_id = "a03:field:logical-state-root-payload-ref"
+containing_schema = "LogicalStateRoot"
+field_tag = 1
+stable_name = "payload_ref"
+exact_wire_type = "StrongRef"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "LogicalStatePayload"
+construction_order = 40
+role_predicate = "true"
+retention_and_cut_rule = "strong while the root is reachable"
+version_status = "active"
+max_size_bytes = 40
+
+[[field]]
+slice_id = "a03"
+row_id = "a03:field:logical-state-root-logical-command-head"
+containing_schema = "LogicalStateRoot"
+field_tag = 2
+stable_name = "logical_command_head"
+exact_wire_type = "StrongRef"
+cardinality = "optional"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "LogicalCommandRecord"
+construction_order = 40
+role_predicate = "true"
+retention_and_cut_rule = "absent only at fresh genesis"
+version_status = "active"
+max_size_bytes = 40
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:commit-command-intent-body"
+containing_schema = "CommitCommand"
+field_tag = 1
+stable_name = "intent_body"
+exact_wire_type = "bytes"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "true"
+retention_and_cut_rule = "graph intent log payload (Appendix B; bead a10 populates the exact schema)"
+version_status = "active"
+max_size_bytes = 268435456
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:control-command-control-body"
+containing_schema = "ControlCommand"
+field_tag = 1
+stable_name = "control_body"
+exact_wire_type = "bytes"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "true"
+retention_and_cut_rule = "control-command payload (bead a10 populates the exact schema)"
+version_status = "active"
+max_size_bytes = 16777216
+
+[[field]]
+slice_id = "a11"
+row_id = "a11:field:commit-marker-commit-seq"
+containing_schema = "CommitMarker"
+field_tag = 1
+stable_name = "commit_seq"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 15
+role_predicate = "true"
+retention_and_cut_rule = "marker identity component (MarkerRef {marker_oid, commit_seq})"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a11"
+row_id = "a11:field:commit-marker-capsule-ref"
+containing_schema = "CommitMarker"
+field_tag = 2
+stable_name = "capsule_ref"
+exact_wire_type = "StrongRef"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "CommitCapsule"
+construction_order = 15
+role_predicate = "true"
+retention_and_cut_rule = "strong until retention-tier cooling (B1); markers stay independently addressable"
+version_status = "active"
+max_size_bytes = 40
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:commit-capsule-command-inputs"
+containing_schema = "CommitCapsule"
+field_tag = 1
+stable_name = "command_inputs"
+exact_wire_type = "LocalCommandInputRef"
+cardinality = "many"
+identity_class = "logical"
+reference_semantics = "strong"
+construction_order = 10
+role_predicate = "true"
+retention_and_cut_rule = "strong within the capsule's retention tier"
+version_status = "active"
+max_size_bytes = 1048576
+
+[[field]]
+slice_id = "a10"
+row_id = "a10:field:prepared-commit-record-exact-realizations"
+containing_schema = "PreparedCommitRecord"
+field_tag = 1
+stable_name = "exact_realizations"
+exact_wire_type = "oid256"
+cardinality = "many"
+identity_class = "physical"
+reference_semantics = "locator"
+construction_order = 12
+role_predicate = "true"
+retention_and_cut_rule = "object_or_subobject_id realization inventory: names packed members without new schema surface; nonretaining locators — prepared OWNERSHIP retention is the obligation, not this edge (FG-INV-16)"
+version_status = "active"
+max_size_bytes = 16777216
+
+[[field]]
+slice_id = "a04"
+row_id = "a04:field:root-manifest-logical-state-root-ref"
+containing_schema = "RootManifest"
+field_tag = 1
+stable_name = "logical_state_root_ref"
+exact_wire_type = "StrongRef"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "LogicalStateRoot"
+construction_order = 40
+role_predicate = "true"
+retention_and_cut_rule = "strong while this manifest is a published or retained root"
+version_status = "active"
+max_size_bytes = 40
+
+[[field]]
+slice_id = "a19"
+row_id = "a19:field:recovery-bridge-spec-source-manifest-identity"
+containing_schema = "RecoveryBridgeSpec"
+field_tag = 1
+stable_name = "source_manifest_identity"
+exact_wire_type = "WeakDigest"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "weak_digest"
+construction_order = 10
+role_predicate = "restore-machinery"
+retention_and_cut_rule = "weak identity of the source manifest; never retains it"
+version_status = "reserved"
+max_size_bytes = 32
+digest_class = "weak_identity"
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-magic"
+containing_schema = "RootSlot"
+field_tag = 1
+stable_name = "magic"
+exact_wire_type = "u32"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "fixed frame field"
+version_status = "active"
+max_size_bytes = 4
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-format"
+containing_schema = "RootSlot"
+field_tag = 2
+stable_name = "format"
+exact_wire_type = "u32"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "fixed frame field; gated by FormatCompatibilityState (FG-INV-10)"
+version_status = "active"
+max_size_bytes = 4
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-slot-generation"
+containing_schema = "RootSlot"
+field_tag = 3
+stable_name = "slot_generation"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "two-slot alternation selector"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-local-writer-fence-epoch"
+containing_schema = "RootSlot"
+field_tag = 4
+stable_name = "local_writer_fence_epoch"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "inode-bound publication sequencer component (FG-INV-10)"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-database-id"
+containing_schema = "RootSlot"
+field_tag = 5
+stable_name = "database_id"
+exact_wire_type = "bytes"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "human/catalog identity; distinct from the security namespace"
+version_status = "active"
+max_size_bytes = 32
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-database-security-namespace-id"
+containing_schema = "RootSlot"
+field_tag = 6
+stable_name = "database_security_namespace_id"
+exact_wire_type = "id256"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "immutable random 256-bit creation identity; same-identity restore preserves it, clone restore mints anew"
+version_status = "active"
+max_size_bytes = 32
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-cluster-incarnation"
+containing_schema = "RootSlot"
+field_tag = 7
+stable_name = "cluster_incarnation"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "incarnation continuity component"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-incarnation-continuity-profile-id"
+containing_schema = "RootSlot"
+field_tag = 8
+stable_name = "incarnation_continuity_profile_id"
+exact_wire_type = "u16"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "DirectoryBound | ExternalCas (W12 requires ExternalCas)"
+version_status = "active"
+max_size_bytes = 2
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-cluster-incarnation-continuity-digest"
+containing_schema = "RootSlot"
+field_tag = 9
+stable_name = "cluster_incarnation_continuity_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "digest of the Appendix A continuity record"
+version_status = "active"
+max_size_bytes = 32
+digest_class = "target"
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-continuity-cas-version"
+containing_schema = "RootSlot"
+field_tag = 10
+stable_name = "continuity_cas_version"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "ExternalCas head version"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-service-visibility-epoch"
+containing_schema = "RootSlot"
+field_tag = 11
+stable_name = "service_visibility_epoch"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "epoch every request/cursor/capability must match (FG-INV-04)"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-root-manifest-oid"
+containing_schema = "RootSlot"
+field_tag = 12
+stable_name = "root_manifest_oid"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "locator"
+target_schema_id = "RootManifest"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "locator to the published RootManifest; the frame is not a graph node and this is not a reachability edge — reachability roots from the manifest under FG-INV-14"
+version_status = "active"
+max_size_bytes = 32
+digest_class = "target"
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-root-bootstrap"
+containing_schema = "RootSlot"
+field_tag = 13
+stable_name = "root_bootstrap"
+exact_wire_type = "RootBootstrap"
+cardinality = "one"
+identity_class = "inline"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "self-sufficient opener; no field comes from the object being opened"
+version_status = "active"
+max_size_bytes = 3584
+
+[[field]]
+slice_id = "a01"
+row_id = "a01:field:root-slot-tear-checksum"
+containing_schema = "RootSlot"
+field_tag = 14
+stable_name = "tear_checksum"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "bootstrap_local"
+reference_semantics = "none"
+construction_order = 50
+role_predicate = "true"
+retention_and_cut_rule = "tear validation"
+version_status = "active"
+max_size_bytes = 8
+digest_class = "transcript"
+transcript_recipe = "checksum over the complete 4 KiB slot bytes excluding exactly the tear_checksum field itself; a mismatch makes the slot structurally incredible"
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-role"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 1
+stable_name = "role"
+exact_wire_type = "u16"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "AuthorityOwningRole closed set Local|Meta; Shards never originate an authority record"
+version_status = "active"
+max_size_bytes = 2
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-database-security-namespace-id"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 2
+stable_name = "database_security_namespace_id"
+exact_wire_type = "id256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "binding scope"
+version_status = "active"
+max_size_bytes = 32
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-cluster-incarnation"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 3
+stable_name = "cluster_incarnation"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "binding scope"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-service-visibility-epoch"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 4
+stable_name = "service_visibility_epoch"
+exact_wire_type = "u64"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "binding scope; equal-scalar/different-root substitution is a mandatory negative fixture (FG-INV-20)"
+version_status = "active"
+max_size_bytes = 8
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-tenant"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 5
+stable_name = "tenant"
+exact_wire_type = "bytes"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "binding subject"
+version_status = "active"
+max_size_bytes = 256
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-principal"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 6
+stable_name = "principal"
+exact_wire_type = "bytes"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "binding subject"
+version_status = "active"
+max_size_bytes = 256
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-non-widenable-authority-ceiling-digest"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 7
+stable_name = "non_widenable_authority_ceiling_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "ceiling commitment; widening is a mandatory negative fixture"
+version_status = "active"
+max_size_bytes = 32
+digest_class = "target"
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-purpose-class"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 8
+stable_name = "purpose_class"
+exact_wire_type = "u16"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "purpose discrimination"
+version_status = "active"
+max_size_bytes = 2
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-security-state-binding"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 9
+stable_name = "security_state_binding"
+exact_wire_type = "SecurityStateBinding"
+cardinality = "one"
+identity_class = "inline"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "one complete SecurityStateBinding (FG-INV-20); scalar epochs alone fail G0"
+version_status = "active"
+max_size_bytes = 1024
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-authority-digest"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 10
+stable_name = "authority_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "authority transcript digest; header copies must byte-match"
+version_status = "active"
+max_size_bytes = 32
+digest_class = "transcript"
+transcript_recipe = "authority transcript (warden/w9 beads register the exact recipe; registered here as a transcript-class digest, never inferred from the name)"
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:authority-binding-record-body-digest"
+containing_schema = "AuthorityBindingRecord"
+field_tag = 11
+stable_name = "body_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 10
+role_predicate = "role-local || role-meta"
+retention_and_cut_rule = "BodyDigest<AuthorityBindingRecord>"
+version_status = "active"
+max_size_bytes = 32
+digest_class = "body"
+bd_domain_separator = "fgdb:body:authority-binding:v1"
+bd_schema_major = 1
+bd_included_field_tags = []
+bd_excluded_field_tags = [11]
+recipe_pin = "fnv1a64:2be6808e91bd9d0d"
+
+[[field]]
+slice_id = "a04"
+row_id = "a04:field:raft-snapshot-local-body-digest"
+containing_schema = "RaftSnapshotLocal"
+field_tag = 1
+stable_name = "body_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 40
+role_predicate = "role-local"
+retention_and_cut_rule = "BodyDigest<RaftSnapshotLocal>; exact-cut snapshot identity component (FG-INV-08)"
+version_status = "reserved"
+max_size_bytes = 32
+digest_class = "body"
+bd_domain_separator = "fgdb:body:raft-snapshot-local:v1"
+bd_schema_major = 1
+bd_included_field_tags = []
+bd_excluded_field_tags = [1]
+recipe_pin = "fnv1a64:3dedb18b0ac32f0c"
+
+[[field]]
+slice_id = "a04"
+row_id = "a04:field:raft-snapshot-meta-body-digest"
+containing_schema = "RaftSnapshotMeta"
+field_tag = 1
+stable_name = "body_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 40
+role_predicate = "role-meta"
+retention_and_cut_rule = "BodyDigest<RaftSnapshotMeta>"
+version_status = "reserved"
+max_size_bytes = 32
+digest_class = "body"
+bd_domain_separator = "fgdb:body:raft-snapshot-meta:v1"
+bd_schema_major = 1
+bd_included_field_tags = []
+bd_excluded_field_tags = [1]
+recipe_pin = "fnv1a64:59702ceb4c836ec2"
+
+[[field]]
+slice_id = "a04"
+row_id = "a04:field:raft-snapshot-meta-applied-results"
+containing_schema = "RaftSnapshotMeta"
+field_tag = 2
+stable_name = "applied_results"
+exact_wire_type = "MetaAppliedResultRef"
+cardinality = "many"
+identity_class = "logical"
+reference_semantics = "strong"
+construction_order = 40
+role_predicate = "role-meta"
+retention_and_cut_rule = "strong within the snapshot cut"
+version_status = "reserved"
+max_size_bytes = 268435456
+
+[[field]]
+slice_id = "a04"
+row_id = "a04:field:raft-snapshot-shard-body-digest"
+containing_schema = "RaftSnapshotShard"
+field_tag = 1
+stable_name = "body_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 40
+role_predicate = "role-shard"
+retention_and_cut_rule = "BodyDigest<RaftSnapshotShard>"
+version_status = "reserved"
+max_size_bytes = 32
+digest_class = "body"
+bd_domain_separator = "fgdb:body:raft-snapshot-shard:v1"
+bd_schema_major = 1
+bd_included_field_tags = []
+bd_excluded_field_tags = [1]
+recipe_pin = "fnv1a64:69bb104a85eb6128"
+
+[[field]]
+slice_id = "a04"
+row_id = "a04:field:raft-snapshot-shard-protocol-evidence"
+containing_schema = "RaftSnapshotShard"
+field_tag = 2
+stable_name = "protocol_evidence"
+exact_wire_type = "ShardProtocolEvidenceRef"
+cardinality = "many"
+identity_class = "logical"
+reference_semantics = "strong"
+construction_order = 40
+role_predicate = "role-shard"
+retention_and_cut_rule = "shard rows are projections or shard-owned protocol state only; never a second Meta semantic authority"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[field]]
+slice_id = "a06"
+row_id = "a06:field:shard-history-inventory-body-digest"
+containing_schema = "ShardHistoryInventory"
+field_tag = 1
+stable_name = "body_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 35
+role_predicate = "role-shard"
+retention_and_cut_rule = "BodyDigest<ShardHistoryInventory>"
+version_status = "reserved"
+max_size_bytes = 32
+digest_class = "body"
+bd_domain_separator = "fgdb:body:shard-history-inventory:v1"
+bd_schema_major = 1
+bd_included_field_tags = []
+bd_excluded_field_tags = [1]
+recipe_pin = "fnv1a64:7f652e0dd29a56aa"
+
+[[field]]
+slice_id = "a06"
+row_id = "a06:field:global-key-envelope-manifest-body-digest"
+containing_schema = "GlobalKeyEnvelopeManifest"
+field_tag = 1
+stable_name = "body_digest"
+exact_wire_type = "digest256"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 35
+role_predicate = "role-meta"
+retention_and_cut_rule = "BodyDigest<GlobalKeyEnvelopeManifest>"
+version_status = "reserved"
+max_size_bytes = 32
+digest_class = "body"
+bd_domain_separator = "fgdb:body:global-key-envelope-manifest:v1"
+bd_schema_major = 1
+bd_included_field_tags = []
+bd_excluded_field_tags = [1]
+recipe_pin = "fnv1a64:55336bfa5c150521"
+
+[[field]]
+slice_id = "a15"
+row_id = "a15:field:backup-manifest-signature-set-body-ref"
+containing_schema = "BackupManifestSignatureSet"
+field_tag = 1
+stable_name = "body_ref"
+exact_wire_type = "StrongRef"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "BackupManifestBody"
+construction_order = 36
+role_predicate = "true"
+retention_and_cut_rule = "signatures over the separately identified body"
+version_status = "reserved"
+max_size_bytes = 40
+
+[[field]]
+slice_id = "a15"
+row_id = "a15:field:backup-manifest-body-ref"
+containing_schema = "BackupManifest"
+field_tag = 1
+stable_name = "body_ref"
+exact_wire_type = "StrongRef"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "BackupManifestBody"
+construction_order = 37
+role_predicate = "true"
+retention_and_cut_rule = "acyclic Body -> SignatureSet -> Manifest construction; contains no self digest"
+version_status = "reserved"
+max_size_bytes = 40
+
+[[field]]
+slice_id = "a15"
+row_id = "a15:field:backup-manifest-signature-set-ref"
+containing_schema = "BackupManifest"
+field_tag = 2
+stable_name = "signature_set_ref"
+exact_wire_type = "StrongRef"
+cardinality = "one"
+identity_class = "logical"
+reference_semantics = "strong"
+target_schema_id = "BackupManifestSignatureSet"
+construction_order = 37
+role_predicate = "true"
+retention_and_cut_rule = "acyclic construction"
+version_status = "reserved"
+max_size_bytes = 40
+
+[[field]]
+slice_id = "a06"
+row_id = "a06:field:checkpoint-state-vector-mandatory-inventory"
+containing_schema = "CheckpointStateVector"
+field_tag = 1
+stable_name = "mandatory_inventory"
+exact_wire_type = "MandatoryInventoryRef"
+cardinality = "many"
+identity_class = "logical"
+reference_semantics = "strong"
+construction_order = 35
+role_predicate = "role-local"
+retention_and_cut_rule = "obligation roots stay until exact terminal release (FG-INV-14/16); generated checkpoint-vector walker input"
+version_status = "reserved"
+max_size_bytes = 268435456
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:meta-applied-result-result-body"
+containing_schema = "MetaAppliedResult"
+field_tag = 1
+stable_name = "result_body"
+exact_wire_type = "bytes"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 20
+role_predicate = "role-meta"
+retention_and_cut_rule = "reserved; a05-a07 populate the exact schema"
+version_status = "reserved"
+max_size_bytes = 268435456
+
+[[field]]
+slice_id = "g0"
+row_id = "g0:field:shard-protocol-evidence-evidence-body"
+containing_schema = "ShardProtocolEvidence"
+field_tag = 1
+stable_name = "evidence_body"
+exact_wire_type = "bytes"
+cardinality = "one"
+identity_class = "scalar"
+reference_semantics = "none"
+construction_order = 20
+role_predicate = "role-shard"
+retention_and_cut_rule = "reserved; a05-a08 populate the exact schema"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+# =============================================================================
+# durable_fields.toml generated reference unions — lossless catalog mirror.
+# =============================================================================
+
+[[reference_union]]
+slice_id = "a10"
+row_id = "a10:reference-union:logical-command-record-command-ref"
+union_name = "CommandRef"
+containing_schema = "LogicalCommandRecord"
+field_tag = 3
+role = "local"
+
+[[reference_union]]
+slice_id = "g0"
+row_id = "g0:reference-union:commit-capsule-local-command-input-ref"
+union_name = "LocalCommandInputRef"
+containing_schema = "CommitCapsule"
+field_tag = 1
+role = "local"
+
+[[reference_union]]
+slice_id = "a04"
+row_id = "a04:reference-union:raft-snapshot-meta-meta-applied-result-ref"
+union_name = "MetaAppliedResultRef"
+containing_schema = "RaftSnapshotMeta"
+field_tag = 2
+role = "meta"
+
+[[reference_union]]
+slice_id = "a04"
+row_id = "a04:reference-union:raft-snapshot-shard-shard-protocol-evidence-ref"
+union_name = "ShardProtocolEvidenceRef"
+containing_schema = "RaftSnapshotShard"
+field_tag = 2
+role = "shard"
+
+[[reference_union]]
+slice_id = "a06"
+row_id = "a06:reference-union:checkpoint-state-vector-mandatory-inventory-ref"
+union_name = "MandatoryInventoryRef"
+containing_schema = "CheckpointStateVector"
+field_tag = 1
+role = "local"
+
+[[reference_union_arm]]
+slice_id = "a10"
+row_id = "a10:reference-union-arm:command-ref-commit-command"
+union_name = "CommandRef"
+containing_schema = "LogicalCommandRecord"
+field_tag = 3
+arm_tag = 1
+stable_name = "CommitCommand"
+target_schema_id = "CommitCommand"
+role = "local"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-local"
+retention_and_cut_rule = "strong until checkpoint suffix retirement (FG-INV-14)"
+version_status = "active"
+max_size_bytes = 40
+
+[[reference_union_arm]]
+slice_id = "a10"
+row_id = "a10:reference-union-arm:command-ref-control-command"
+union_name = "CommandRef"
+containing_schema = "LogicalCommandRecord"
+field_tag = 3
+arm_tag = 2
+stable_name = "ControlCommand"
+target_schema_id = "ControlCommand"
+role = "local"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-local"
+retention_and_cut_rule = "strong until checkpoint suffix retirement (FG-INV-14)"
+version_status = "active"
+max_size_bytes = 40
+
+[[reference_union_arm]]
+slice_id = "g0"
+row_id = "g0:reference-union-arm:local-command-input-ref-commit-command"
+union_name = "LocalCommandInputRef"
+containing_schema = "CommitCapsule"
+field_tag = 1
+arm_tag = 1
+stable_name = "CommitCommand"
+target_schema_id = "CommitCommand"
+role = "local"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-local"
+retention_and_cut_rule = "strong within the capsule's retention tier"
+version_status = "active"
+max_size_bytes = 40
+
+[[reference_union_arm]]
+slice_id = "g0"
+row_id = "g0:reference-union-arm:local-command-input-ref-control-command"
+union_name = "LocalCommandInputRef"
+containing_schema = "CommitCapsule"
+field_tag = 1
+arm_tag = 2
+stable_name = "ControlCommand"
+target_schema_id = "ControlCommand"
+role = "local"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-local"
+retention_and_cut_rule = "strong within the capsule's retention tier"
+version_status = "active"
+max_size_bytes = 40
+
+[[reference_union_arm]]
+slice_id = "a04"
+row_id = "a04:reference-union-arm:meta-applied-result-ref-meta-applied-result"
+union_name = "MetaAppliedResultRef"
+containing_schema = "RaftSnapshotMeta"
+field_tag = 2
+arm_tag = 1
+stable_name = "MetaAppliedResult"
+target_schema_id = "MetaAppliedResult"
+role = "meta"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-meta"
+retention_and_cut_rule = "strong within the snapshot cut"
+version_status = "reserved"
+max_size_bytes = 40
+
+[[reference_union_arm]]
+slice_id = "a04"
+row_id = "a04:reference-union-arm:shard-protocol-evidence-ref-shard-protocol-evidence"
+union_name = "ShardProtocolEvidenceRef"
+containing_schema = "RaftSnapshotShard"
+field_tag = 2
+arm_tag = 1
+stable_name = "ShardProtocolEvidence"
+target_schema_id = "ShardProtocolEvidence"
+role = "shard"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-shard"
+retention_and_cut_rule = "shard rows are projections or shard-owned protocol state only; never a second Meta semantic authority"
+version_status = "reserved"
+max_size_bytes = 40
+
+[[reference_union_arm]]
+slice_id = "a06"
+row_id = "a06:reference-union-arm:mandatory-inventory-ref-prepared-commit-record"
+union_name = "MandatoryInventoryRef"
+containing_schema = "CheckpointStateVector"
+field_tag = 1
+arm_tag = 1
+stable_name = "PreparedCommitRecord"
+target_schema_id = "PreparedCommitRecord"
+role = "local"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-local"
+retention_and_cut_rule = "obligation roots stay until exact terminal release (FG-INV-14/16); generated checkpoint-vector walker input"
+version_status = "reserved"
+max_size_bytes = 40
+
+[[reference_union_arm]]
+slice_id = "a06"
+row_id = "a06:reference-union-arm:mandatory-inventory-ref-commit-capsule"
+union_name = "MandatoryInventoryRef"
+containing_schema = "CheckpointStateVector"
+field_tag = 1
+arm_tag = 2
+stable_name = "CommitCapsule"
+target_schema_id = "CommitCapsule"
+role = "local"
+identity_class = "logical"
+reference_semantics = "strong"
+role_predicate = "role-local"
+retention_and_cut_rule = "obligation roots stay until exact terminal release (FG-INV-14/16); generated checkpoint-vector walker input"
+version_status = "reserved"
+max_size_bytes = 40

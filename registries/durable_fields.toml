@@ -1,74 +1,13 @@
-# =============================================================================
-# durable_fields.toml — the normative per-field cross-index (all identity classes)
-# =============================================================================
-# Bead: fgdb-g0-identity-registries-hrx
-# Provenance: plan §5.1 (lines 292, 328, 338).
-#
-# One row per canonical field or union arm. Appendix pseudo-schemas are
-# checked renderings of THIS table, not permission to infer a type from an
-# English name: every apparent root, ref, OID, digest, Raft pointer, floor
-# inventory, backup closure, or union element must have an explicit row.
-# **A field absent from this table is unencodable.** This table is the sole
-# input to generated reachability/GC, checkpoint-vector, backup-closure,
-# construction-DAG, compatibility, size-limit, and fuzz walkers.
-#
-# Field row:
-#   containing_schema     name resolving in one identity-class registry
-#   field_tag             u16, permanent/reserved rule as codes
-#   stable_name
-#   exact_wire_type       builtin scalar (u16 u32 u64 i64 bool bytes string
-#                         digest256 oid256) | wire_types.toml row |
-#                         [[reference_union]] name. Bare "StrongRef" REQUIRES
-#                         a concrete target_schema_id; a polymorphic target
-#                         requires a generated reference union — bare
-#                         StrongRef<A|B>, StrongRef[], slash-separated
-#                         pseudo-types, or generic RegisteredStrongRef are
-#                         invalid in normative bytes.
-#   cardinality           one | optional | many
-#   identity_class        scalar | inline | logical | physical | bootstrap_local
-#   reference_semantics   none | strong | conditional | weak_digest | locator
-#                         (strong/conditional targets MUST be logical rows;
-#                          weak_digest/locator are nonretaining)
-#   target_schema_id      required for strong/conditional/weak_digest/locator
-#                         with a concrete target
-#   construction_order    must equal the containing schema's ordinal class
-#   role_predicate        activation predicate
-#   retention_and_cut_rule
-#   version_status        active | reserved | retired | experimental
-#   max_size_bytes
-#
-# Digest rows additionally declare exactly one class (never by naming
-# convention):
-#   digest_class          target | transcript | weak_identity | body
-#   transcript_recipe     (transcript rows) the registered recipe
-#   bd_domain_separator / bd_schema_major / bd_included_field_tags /
-#   bd_excluded_field_tags / recipe_pin  (body rows)
-# BodyDigest default recipe: BLAKE3(domain_separator ‖ canonical(schema_major,
-# T excluding exactly the one BodyDigest field)). Empty included list means
-# "all fields except the excluded tags". Unknown exclusions, two body-digest
-# fields in one schema, implicit zero placeholders, or self-including
-# computation are G0 errors. `recipe_pin` is an FNV-64 drift pin over the
-# canonical recipe transcript — a CI diffability pin, NOT the identity law
-# (the identity law is the BLAKE3 recipe, implemented by w1-generated-parsers).
-#
-# Reference unions: generated per containing schema and role; every arm names
-# exactly one registered top-level logical target.
-# =============================================================================
-
+# GENERATED from appendix_a_catalog.toml; DO NOT EDIT THIS PROJECTION.
 schema_version = 1
 
 [registry]
 name = "durable_fields"
 registry_epoch = 1
 
-# ---------------------------------------------------------------------------
-# LogicalStatePayload (order 20) — complete semantic state at
-# {applied_logical_command_seq, applied_commit_seq}; no command-head wrapper.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "LogicalStatePayload"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "applied_logical_command_seq"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -82,7 +21,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "LogicalStatePayload"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "applied_commit_seq"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -94,13 +33,9 @@ retention_and_cut_rule = "lives/dies with the payload object"
 version_status = "active"
 max_size_bytes = 8
 
-# ---------------------------------------------------------------------------
-# LogicalCommandRecord (order 30) — constructed after the resulting payload.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "LogicalCommandRecord"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "logical_command_seq"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -114,7 +49,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "LogicalCommandRecord"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "origin"
 exact_wire_type = "LocalCommandOrigin"
 cardinality = "one"
@@ -128,7 +63,7 @@ max_size_bytes = 128
 
 [[field]]
 containing_schema = "LogicalCommandRecord"
-field_tag = 3
+field_tag = 0x0003
 stable_name = "command"
 exact_wire_type = "CommandRef"
 cardinality = "one"
@@ -142,7 +77,7 @@ max_size_bytes = 48
 
 [[field]]
 containing_schema = "LogicalCommandRecord"
-field_tag = 4
+field_tag = 0x0004
 stable_name = "transaction_marker"
 exact_wire_type = "StrongMarkerRef"
 cardinality = "optional"
@@ -157,7 +92,7 @@ max_size_bytes = 48
 
 [[field]]
 containing_schema = "LogicalCommandRecord"
-field_tag = 5
+field_tag = 0x0005
 stable_name = "logical_command_hlc"
 exact_wire_type = "HlcTimestamp"
 cardinality = "one"
@@ -171,7 +106,7 @@ max_size_bytes = 16
 
 [[field]]
 containing_schema = "LogicalCommandRecord"
-field_tag = 6
+field_tag = 0x0006
 stable_name = "resulting_state_payload_digest"
 exact_wire_type = "WeakDigest"
 cardinality = "one"
@@ -185,14 +120,9 @@ version_status = "active"
 max_size_bytes = 32
 digest_class = "weak_identity"
 
-# ---------------------------------------------------------------------------
-# LogicalStateRoot (order 40) — commits state + transition without either
-# object naming a future ObjectId; fresh genesis alone has no head.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "LogicalStateRoot"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "payload_ref"
 exact_wire_type = "StrongRef"
 cardinality = "one"
@@ -207,7 +137,7 @@ max_size_bytes = 40
 
 [[field]]
 containing_schema = "LogicalStateRoot"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "logical_command_head"
 exact_wire_type = "StrongRef"
 cardinality = "optional"
@@ -220,15 +150,9 @@ retention_and_cut_rule = "absent only at fresh genesis"
 version_status = "active"
 max_size_bytes = 40
 
-# ---------------------------------------------------------------------------
-# CommitCommand / ControlCommand (order 10) — command inputs. A command input
-# NEVER names its own applied result (future-result edges are the
-# construction-DAG negative fixture).
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "CommitCommand"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "intent_body"
 exact_wire_type = "bytes"
 cardinality = "one"
@@ -242,7 +166,7 @@ max_size_bytes = 268435456
 
 [[field]]
 containing_schema = "ControlCommand"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "control_body"
 exact_wire_type = "bytes"
 cardinality = "one"
@@ -254,13 +178,9 @@ retention_and_cut_rule = "control-command payload (bead a10 populates the exact 
 version_status = "active"
 max_size_bytes = 16777216
 
-# ---------------------------------------------------------------------------
-# CommitMarker (order 15) / CommitCapsule (order 10) / PreparedCommitRecord.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "CommitMarker"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "commit_seq"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -274,7 +194,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "CommitMarker"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "capsule_ref"
 exact_wire_type = "StrongRef"
 cardinality = "one"
@@ -289,7 +209,7 @@ max_size_bytes = 40
 
 [[field]]
 containing_schema = "CommitCapsule"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "command_inputs"
 exact_wire_type = "LocalCommandInputRef"
 cardinality = "many"
@@ -303,7 +223,7 @@ max_size_bytes = 1048576
 
 [[field]]
 containing_schema = "PreparedCommitRecord"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "exact_realizations"
 exact_wire_type = "oid256"
 cardinality = "many"
@@ -315,13 +235,9 @@ retention_and_cut_rule = "object_or_subobject_id realization inventory: names pa
 version_status = "active"
 max_size_bytes = 16777216
 
-# ---------------------------------------------------------------------------
-# RootManifest (order 40).
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "RootManifest"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "logical_state_root_ref"
 exact_wire_type = "StrongRef"
 cardinality = "one"
@@ -334,13 +250,9 @@ retention_and_cut_rule = "strong while this manifest is a published or retained 
 version_status = "active"
 max_size_bytes = 40
 
-# ---------------------------------------------------------------------------
-# RecoveryBridgeSpec (order 10, reserved).
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "RecoveryBridgeSpec"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "source_manifest_identity"
 exact_wire_type = "WeakDigest"
 cardinality = "one"
@@ -353,15 +265,9 @@ version_status = "reserved"
 max_size_bytes = 32
 digest_class = "weak_identity"
 
-# ---------------------------------------------------------------------------
-# RootSlot (bootstrap frame; identity_class bootstrap_local, order 50).
-# Frame fields reference logical objects only through NONRETAINING
-# locator/digest semantics; a strong ref from a bootstrap frame is invalid.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "magic"
 exact_wire_type = "u32"
 cardinality = "one"
@@ -375,7 +281,7 @@ max_size_bytes = 4
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "format"
 exact_wire_type = "u32"
 cardinality = "one"
@@ -389,7 +295,7 @@ max_size_bytes = 4
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 3
+field_tag = 0x0003
 stable_name = "slot_generation"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -403,7 +309,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 4
+field_tag = 0x0004
 stable_name = "local_writer_fence_epoch"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -417,7 +323,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 5
+field_tag = 0x0005
 stable_name = "database_id"
 exact_wire_type = "bytes"
 cardinality = "one"
@@ -431,7 +337,7 @@ max_size_bytes = 32
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 6
+field_tag = 0x0006
 stable_name = "database_security_namespace_id"
 exact_wire_type = "id256"
 cardinality = "one"
@@ -445,7 +351,7 @@ max_size_bytes = 32
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 7
+field_tag = 0x0007
 stable_name = "cluster_incarnation"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -459,7 +365,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 8
+field_tag = 0x0008
 stable_name = "incarnation_continuity_profile_id"
 exact_wire_type = "u16"
 cardinality = "one"
@@ -473,7 +379,7 @@ max_size_bytes = 2
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 9
+field_tag = 0x0009
 stable_name = "cluster_incarnation_continuity_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -488,7 +394,7 @@ digest_class = "target"
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 10
+field_tag = 0x000a
 stable_name = "continuity_cas_version"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -502,7 +408,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 11
+field_tag = 0x000b
 stable_name = "service_visibility_epoch"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -516,7 +422,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 12
+field_tag = 0x000c
 stable_name = "root_manifest_oid"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -532,7 +438,7 @@ digest_class = "target"
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 13
+field_tag = 0x000d
 stable_name = "root_bootstrap"
 exact_wire_type = "RootBootstrap"
 cardinality = "one"
@@ -546,7 +452,7 @@ max_size_bytes = 3584
 
 [[field]]
 containing_schema = "RootSlot"
-field_tag = 14
+field_tag = 0x000e
 stable_name = "tear_checksum"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -560,14 +466,9 @@ max_size_bytes = 8
 digest_class = "transcript"
 transcript_recipe = "checksum over the complete 4 KiB slot bytes excluding exactly the tear_checksum field itself; a mismatch makes the slot structurally incredible"
 
-# ---------------------------------------------------------------------------
-# AuthorityBindingRecord (order 10) — §5.1 security binding; the BodyDigest
-# exemplar.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "role"
 exact_wire_type = "u16"
 cardinality = "one"
@@ -581,7 +482,7 @@ max_size_bytes = 2
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "database_security_namespace_id"
 exact_wire_type = "id256"
 cardinality = "one"
@@ -595,7 +496,7 @@ max_size_bytes = 32
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 3
+field_tag = 0x0003
 stable_name = "cluster_incarnation"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -609,7 +510,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 4
+field_tag = 0x0004
 stable_name = "service_visibility_epoch"
 exact_wire_type = "u64"
 cardinality = "one"
@@ -623,7 +524,7 @@ max_size_bytes = 8
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 5
+field_tag = 0x0005
 stable_name = "tenant"
 exact_wire_type = "bytes"
 cardinality = "one"
@@ -637,7 +538,7 @@ max_size_bytes = 256
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 6
+field_tag = 0x0006
 stable_name = "principal"
 exact_wire_type = "bytes"
 cardinality = "one"
@@ -651,7 +552,7 @@ max_size_bytes = 256
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 7
+field_tag = 0x0007
 stable_name = "non_widenable_authority_ceiling_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -666,7 +567,7 @@ digest_class = "target"
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 8
+field_tag = 0x0008
 stable_name = "purpose_class"
 exact_wire_type = "u16"
 cardinality = "one"
@@ -680,7 +581,7 @@ max_size_bytes = 2
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 9
+field_tag = 0x0009
 stable_name = "security_state_binding"
 exact_wire_type = "SecurityStateBinding"
 cardinality = "one"
@@ -694,7 +595,7 @@ max_size_bytes = 1024
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 10
+field_tag = 0x000a
 stable_name = "authority_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -710,7 +611,7 @@ transcript_recipe = "authority transcript (warden/w9 beads register the exact re
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
-field_tag = 11
+field_tag = 0x000b
 stable_name = "body_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -728,13 +629,9 @@ bd_included_field_tags = []
 bd_excluded_field_tags = [11]
 recipe_pin = "fnv1a64:2be6808e91bd9d0d"
 
-# ---------------------------------------------------------------------------
-# Role-tagged Raft snapshots (reserved) — §5.1 names their body transcripts.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "RaftSnapshotLocal"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "body_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -754,7 +651,7 @@ recipe_pin = "fnv1a64:3dedb18b0ac32f0c"
 
 [[field]]
 containing_schema = "RaftSnapshotMeta"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "body_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -774,7 +671,7 @@ recipe_pin = "fnv1a64:59702ceb4c836ec2"
 
 [[field]]
 containing_schema = "RaftSnapshotMeta"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "applied_results"
 exact_wire_type = "MetaAppliedResultRef"
 cardinality = "many"
@@ -788,7 +685,7 @@ max_size_bytes = 268435456
 
 [[field]]
 containing_schema = "RaftSnapshotShard"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "body_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -808,7 +705,7 @@ recipe_pin = "fnv1a64:69bb104a85eb6128"
 
 [[field]]
 containing_schema = "RaftSnapshotShard"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "protocol_evidence"
 exact_wire_type = "ShardProtocolEvidenceRef"
 cardinality = "many"
@@ -820,15 +717,9 @@ retention_and_cut_rule = "shard rows are projections or shard-owned protocol sta
 version_status = "reserved"
 max_size_bytes = 16777216
 
-# ---------------------------------------------------------------------------
-# ShardHistoryInventory / GlobalKeyEnvelopeManifest (reserved BodyDigest rows
-# named by §5.1) and the acyclic BackupManifest construction (NO self digest:
-# Body -> SignatureSet -> Manifest).
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "ShardHistoryInventory"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "body_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -848,7 +739,7 @@ recipe_pin = "fnv1a64:7f652e0dd29a56aa"
 
 [[field]]
 containing_schema = "GlobalKeyEnvelopeManifest"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "body_digest"
 exact_wire_type = "digest256"
 cardinality = "one"
@@ -868,7 +759,7 @@ recipe_pin = "fnv1a64:55336bfa5c150521"
 
 [[field]]
 containing_schema = "BackupManifestSignatureSet"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "body_ref"
 exact_wire_type = "StrongRef"
 cardinality = "one"
@@ -883,7 +774,7 @@ max_size_bytes = 40
 
 [[field]]
 containing_schema = "BackupManifest"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "body_ref"
 exact_wire_type = "StrongRef"
 cardinality = "one"
@@ -898,7 +789,7 @@ max_size_bytes = 40
 
 [[field]]
 containing_schema = "BackupManifest"
-field_tag = 2
+field_tag = 0x0002
 stable_name = "signature_set_ref"
 exact_wire_type = "StrongRef"
 cardinality = "one"
@@ -911,13 +802,9 @@ retention_and_cut_rule = "acyclic construction"
 version_status = "reserved"
 max_size_bytes = 40
 
-# ---------------------------------------------------------------------------
-# CheckpointStateVector (order 35) and the W12 result/evidence bodies.
-# ---------------------------------------------------------------------------
-
 [[field]]
 containing_schema = "CheckpointStateVector"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "mandatory_inventory"
 exact_wire_type = "MandatoryInventoryRef"
 cardinality = "many"
@@ -931,7 +818,7 @@ max_size_bytes = 268435456
 
 [[field]]
 containing_schema = "MetaAppliedResult"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "result_body"
 exact_wire_type = "bytes"
 cardinality = "one"
@@ -945,7 +832,7 @@ max_size_bytes = 268435456
 
 [[field]]
 containing_schema = "ShardProtocolEvidence"
-field_tag = 1
+field_tag = 0x0001
 stable_name = "evidence_body"
 exact_wire_type = "bytes"
 cardinality = "one"
@@ -957,49 +844,41 @@ retention_and_cut_rule = "reserved; a05-a08 populate the exact schema"
 version_status = "reserved"
 max_size_bytes = 16777216
 
-# =============================================================================
-# Generated reference unions — exact, per containing schema and role. Every
-# arm names exactly one registered top-level logical target and carries the
-# target's canonical typed reference encoding. Bare StrongRef<A|B> etc. are
-# invalid in normative bytes; compact appendix renderings must expand through
-# these rows. The four §5.1-required exemplars are all present.
-# =============================================================================
-
 [[reference_union]]
 union_name = "CommandRef"
 containing_schema = "LogicalCommandRecord"
-field_tag = 3
+field_tag = 0x0003
 role = "local"
 
 [[reference_union]]
 union_name = "LocalCommandInputRef"
 containing_schema = "CommitCapsule"
-field_tag = 1
+field_tag = 0x0001
 role = "local"
 
 [[reference_union]]
 union_name = "MetaAppliedResultRef"
 containing_schema = "RaftSnapshotMeta"
-field_tag = 2
+field_tag = 0x0002
 role = "meta"
 
 [[reference_union]]
 union_name = "ShardProtocolEvidenceRef"
 containing_schema = "RaftSnapshotShard"
-field_tag = 2
+field_tag = 0x0002
 role = "shard"
 
 [[reference_union]]
 union_name = "MandatoryInventoryRef"
 containing_schema = "CheckpointStateVector"
-field_tag = 1
+field_tag = 0x0001
 role = "local"
 
 [[reference_union_arm]]
 union_name = "CommandRef"
 containing_schema = "LogicalCommandRecord"
-field_tag = 3
-arm_tag = 1
+field_tag = 0x0003
+arm_tag = 0x0001
 stable_name = "CommitCommand"
 target_schema_id = "CommitCommand"
 role = "local"
@@ -1013,8 +892,8 @@ max_size_bytes = 40
 [[reference_union_arm]]
 union_name = "CommandRef"
 containing_schema = "LogicalCommandRecord"
-field_tag = 3
-arm_tag = 2
+field_tag = 0x0003
+arm_tag = 0x0002
 stable_name = "ControlCommand"
 target_schema_id = "ControlCommand"
 role = "local"
@@ -1028,8 +907,8 @@ max_size_bytes = 40
 [[reference_union_arm]]
 union_name = "LocalCommandInputRef"
 containing_schema = "CommitCapsule"
-field_tag = 1
-arm_tag = 1
+field_tag = 0x0001
+arm_tag = 0x0001
 stable_name = "CommitCommand"
 target_schema_id = "CommitCommand"
 role = "local"
@@ -1043,8 +922,8 @@ max_size_bytes = 40
 [[reference_union_arm]]
 union_name = "LocalCommandInputRef"
 containing_schema = "CommitCapsule"
-field_tag = 1
-arm_tag = 2
+field_tag = 0x0001
+arm_tag = 0x0002
 stable_name = "ControlCommand"
 target_schema_id = "ControlCommand"
 role = "local"
@@ -1058,8 +937,8 @@ max_size_bytes = 40
 [[reference_union_arm]]
 union_name = "MetaAppliedResultRef"
 containing_schema = "RaftSnapshotMeta"
-field_tag = 2
-arm_tag = 1
+field_tag = 0x0002
+arm_tag = 0x0001
 stable_name = "MetaAppliedResult"
 target_schema_id = "MetaAppliedResult"
 role = "meta"
@@ -1073,8 +952,8 @@ max_size_bytes = 40
 [[reference_union_arm]]
 union_name = "ShardProtocolEvidenceRef"
 containing_schema = "RaftSnapshotShard"
-field_tag = 2
-arm_tag = 1
+field_tag = 0x0002
+arm_tag = 0x0001
 stable_name = "ShardProtocolEvidence"
 target_schema_id = "ShardProtocolEvidence"
 role = "shard"
@@ -1088,8 +967,8 @@ max_size_bytes = 40
 [[reference_union_arm]]
 union_name = "MandatoryInventoryRef"
 containing_schema = "CheckpointStateVector"
-field_tag = 1
-arm_tag = 1
+field_tag = 0x0001
+arm_tag = 0x0001
 stable_name = "PreparedCommitRecord"
 target_schema_id = "PreparedCommitRecord"
 role = "local"
@@ -1103,8 +982,8 @@ max_size_bytes = 40
 [[reference_union_arm]]
 union_name = "MandatoryInventoryRef"
 containing_schema = "CheckpointStateVector"
-field_tag = 1
-arm_tag = 2
+field_tag = 0x0001
+arm_tag = 0x0002
 stable_name = "CommitCapsule"
 target_schema_id = "CommitCapsule"
 role = "local"

@@ -104,6 +104,26 @@ kind = "script"
 artifact = "scripts/g0_identity_e2e.sh"
 status = "live"
 
+# --- Canonical Appendix A catalog scaffold and generated projections. ---
+
+[[checker]]
+symbol = "appendix_a_catalog_source"
+kind = "binary"
+artifact = "tools/registry-check/src/main.rs"
+status = "live"
+
+[[checker]]
+symbol = "appendix_a_catalog_projection_diff"
+kind = "binary"
+artifact = "tools/registry-check/src/main.rs"
+status = "live"
+
+[[checker]]
+symbol = "appendix_a_catalog_closure"
+kind = "binary"
+artifact = "tools/registry-check/src/main.rs"
+status = "live"
+
 # --- Frozen architecture-decision record and reciprocal provenance closure.
 
 [[checker]]

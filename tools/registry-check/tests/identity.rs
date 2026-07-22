@@ -14,6 +14,7 @@
 //! targeted in-memory mutations, so a defect in the shipped registries and a
 //! defect in the checker are both build breaks.
 
+use registry_check::appendix_a::{self, Catalog, Violation};
 use registry_check::identity::{
     self, FieldRow, IdentityRegistries, LogicalKind, bodydigest_pin, bodydigest_transcript,
 };
@@ -29,6 +30,95 @@ fn repo_root() -> PathBuf {
 
 fn real_identity() -> IdentityRegistries {
     identity::load_identity(&repo_root().join("registries")).expect("identity registries load")
+}
+
+fn real_appendix_catalog_text() -> String {
+    std::fs::read_to_string(repo_root().join(appendix_a::CATALOG_PATH))
+        .expect("Appendix A catalog is readable")
+}
+
+fn real_appendix_catalog() -> Catalog {
+    appendix_a::parse_catalog(&real_appendix_catalog_text()).expect("Appendix A catalog parses")
+}
+
+fn real_plan_source() -> Vec<u8> {
+    std::fs::read(repo_root().join(appendix_a::PLAN_PATH)).expect("plan source is readable")
+}
+
+fn source_range(source: &[u8], start_line: i64, end_line: i64) -> Vec<u8> {
+    let skip = usize::try_from(start_line - 1).expect("positive source line");
+    let take = usize::try_from(end_line - start_line + 1).expect("ordered source range");
+    source
+        .split_inclusive(|byte| *byte == b'\n')
+        .skip(skip)
+        .take(take)
+        .flatten()
+        .copied()
+        .collect()
+}
+
+fn line_start_offset(source: &[u8], line: i64) -> usize {
+    let preceding = usize::try_from(line - 1).expect("positive source line");
+    source
+        .split_inclusive(|byte| *byte == b'\n')
+        .take(preceding)
+        .map(<[u8]>::len)
+        .sum()
+}
+
+fn has_violation(violations: &[Violation], code: &str, detail: &str) -> bool {
+    violations
+        .iter()
+        .any(|violation| violation.code == code && violation.msg.contains(detail))
+}
+
+fn duplicate_slice(catalog: &mut Catalog) {
+    catalog.slices[1].id = catalog.slices[0].id.clone();
+}
+
+fn reorder_slices(catalog: &mut Catalog) {
+    catalog.slices.swap(0, 1);
+}
+
+fn gap_slices(catalog: &mut Catalog) {
+    catalog.slices[1].start_line += 1;
+}
+
+fn off_by_one_manifest(catalog: &mut Catalog) {
+    catalog.source_manifest.end_line -= 1;
+}
+
+fn wrong_slice_bead(catalog: &mut Catalog) {
+    catalog.slices[10].bead_id.push_str("-wrong");
+}
+
+fn wrong_manifest_hash(catalog: &mut Catalog) {
+    catalog.source_manifest.sha256.replace_range(0..1, "0");
+}
+
+fn wrong_slice_hash(catalog: &mut Catalog) {
+    catalog.slices[10].sha256.replace_range(0..1, "0");
+}
+
+fn swap_first_two_table_blocks(source: &str, header: &str) -> String {
+    let first = source.find(header).expect("first table block exists");
+    let second = first
+        + header.len()
+        + source[first + header.len()..]
+            .find(header)
+            .expect("second table block exists");
+    let third = second
+        + header.len()
+        + source[second + header.len()..]
+            .find(header)
+            .expect("third table block exists");
+
+    let mut reordered = String::with_capacity(source.len());
+    reordered.push_str(&source[..first]);
+    reordered.push_str(&source[second..third]);
+    reordered.push_str(&source[first..second]);
+    reordered.push_str(&source[third..]);
+    reordered
 }
 
 fn codes(r: &IdentityRegistries) -> Vec<String> {
@@ -79,6 +169,298 @@ fn kind(code: i64, name: &str, status: &str, order: i64) -> LogicalKind {
 // ---------------------------------------------------------------------------
 // Baseline.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn appendix_a_catalog_real_source_verifies_and_reconstructs() {
+    let root = repo_root();
+    let catalog = appendix_a::load_and_verify(&root).expect("real Appendix A source verifies");
+    let source = real_plan_source();
+    let appendix = source_range(
+        &source,
+        catalog.source_manifest.start_line,
+        catalog.source_manifest.end_line,
+    );
+
+    assert_eq!(
+        appendix.len(),
+        usize::try_from(appendix_a::APPENDIX_BYTE_COUNT).expect("byte count fits usize")
+    );
+    assert_eq!(
+        registry_check::hash::sha256_hex(&appendix),
+        appendix_a::APPENDIX_SHA256
+    );
+
+    let mut reconstructed = Vec::with_capacity(appendix.len());
+    for slice in &catalog.slices {
+        let bytes = source_range(&source, slice.start_line, slice.end_line);
+        assert_eq!(
+            bytes.len(),
+            usize::try_from(slice.byte_count).expect("slice byte count fits usize"),
+            "{} byte count",
+            slice.id
+        );
+        assert_eq!(
+            registry_check::hash::sha256_hex(&bytes),
+            slice.sha256,
+            "{} source hash",
+            slice.id
+        );
+        reconstructed.extend_from_slice(&bytes);
+    }
+    assert_eq!(
+        reconstructed, appendix,
+        "ordered slices reconstruct Appendix A"
+    );
+}
+
+#[test]
+fn appendix_a_catalog_parse_is_closed_and_versioned() {
+    let source = real_appendix_catalog_text();
+    appendix_a::parse_catalog(&source).expect("baseline catalog parses");
+
+    let mutations = vec![
+        (
+            "unknown root",
+            source.replacen(
+                "schema_version = 1",
+                "schema_version = 1\nunknown_root_key = true",
+                1,
+            ),
+            "catalog_unknown_key",
+            "unknown_root_key",
+        ),
+        (
+            "unknown catalog key",
+            source.replacen(
+                "source_encoding = \"utf-8-lf\"",
+                "source_encoding = \"utf-8-lf\"\nunknown_catalog_key = true",
+                1,
+            ),
+            "catalog_unknown_key",
+            "unknown_catalog_key",
+        ),
+        (
+            "unknown slice key",
+            source.replacen(
+                "definition_status = \"declared\"",
+                "definition_status = \"declared\"\nunknown_slice_key = true",
+                1,
+            ),
+            "catalog_unknown_key",
+            "unknown_slice_key",
+        ),
+        (
+            "wrong schema version",
+            source.replacen("schema_version = 1", "schema_version = 2", 1),
+            "catalog_pin_mismatch",
+            "schema_version",
+        ),
+        (
+            "reordered projection epochs",
+            swap_first_two_table_blocks(&source, "[[projection_epoch]]"),
+            "projection_epoch_order",
+            "expected registry",
+        ),
+        (
+            "unknown projection epoch key",
+            source.replacen(
+                "registry_epoch = 1",
+                "registry_epoch = 1\nunknown_projection_epoch_key = true",
+                1,
+            ),
+            "catalog_unknown_key",
+            "unknown_projection_epoch_key",
+        ),
+        (
+            "unknown projection row key",
+            source.replacen(
+                "[[logical_kind]]",
+                "[[logical_kind]]\nunknown_projection_row_key = true",
+                1,
+            ),
+            "catalog_projection_schema",
+            "unknown_projection_row_key",
+        ),
+        (
+            "missing projection row metadata",
+            source.replacen("slice_id = \"a03\"\n", "", 1),
+            "catalog_schema",
+            "slice_id",
+        ),
+    ];
+
+    for (name, mutated, expected_code, expected_detail) in mutations {
+        let violations = appendix_a::parse_catalog(&mutated)
+            .expect_err("closed catalog mutation must be rejected");
+        assert!(
+            has_violation(&violations, expected_code, expected_detail),
+            "{name} did not produce {expected_code}/{expected_detail}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn appendix_a_catalog_manifest_mutations_fail_closed() {
+    type Mutation = fn(&mut Catalog);
+    let cases: [(&str, Mutation, &str); 7] = [
+        ("duplicate slice", duplicate_slice, "slice_duplicate"),
+        ("reordered slices", reorder_slices, "catalog_pin_mismatch"),
+        ("gapped slices", gap_slices, "slice_range_mismatch"),
+        (
+            "off-by-one manifest",
+            off_by_one_manifest,
+            "source_manifest_range_mismatch",
+        ),
+        ("wrong Bead", wrong_slice_bead, "catalog_pin_mismatch"),
+        (
+            "wrong manifest hash",
+            wrong_manifest_hash,
+            "catalog_pin_mismatch",
+        ),
+        ("wrong slice hash", wrong_slice_hash, "catalog_pin_mismatch"),
+    ];
+
+    for (name, mutate, expected_code) in cases {
+        let mut catalog = real_appendix_catalog();
+        mutate(&mut catalog);
+        let violations = appendix_a::validate_catalog(&catalog);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.code == expected_code),
+            "{name} did not produce {expected_code}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn appendix_a_catalog_raw_source_mutations_fail_closed() {
+    let catalog = real_appendix_catalog();
+    let source = real_plan_source();
+    let appendix_start = line_start_offset(&source, appendix_a::APPENDIX_START_LINE);
+
+    let mut cr = source.clone();
+    cr.insert(appendix_start, b'\r');
+
+    let mut byte_mutation = source.clone();
+    byte_mutation[appendix_start] = b'!';
+
+    let mut truncated = source.clone();
+    truncated.truncate(line_start_offset(&source, appendix_a::APPENDIX_END_LINE));
+
+    for (name, mutated, expected_code) in [
+        ("carriage return", cr, "source_encoding"),
+        ("source byte", byte_mutation, "source_sha256_mismatch"),
+        ("truncation", truncated, "source_range_missing"),
+    ] {
+        let violations = appendix_a::verify_source(&catalog, &mutated);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.code == expected_code),
+            "{name} did not produce {expected_code}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn appendix_a_catalog_projections_are_deterministic_and_round_trip() {
+    let catalog = real_appendix_catalog();
+    let generated = appendix_a::generated_projections(&catalog);
+    assert_eq!(
+        generated,
+        appendix_a::generated_projections(&catalog),
+        "repeated projection generation must be byte-identical"
+    );
+
+    let actual_files: Vec<&str> = generated.iter().map(|(file, _)| file.as_str()).collect();
+    let expected_files = vec![
+        "logical_object_kinds.toml",
+        "physical_record_kinds.toml",
+        "bootstrap_frames.toml",
+        "prebootstrap_artifact_kinds.toml",
+        "wire_types.toml",
+        "durable_fields.toml",
+    ];
+    assert_eq!(actual_files, expected_files, "exactly six projections");
+
+    for (file, source) in generated {
+        let table = registry_check::toml::parse(&source).expect("generated projection parses");
+        match file.as_str() {
+            "logical_object_kinds.toml" => {
+                let (epoch, rows) = identity::logical_from(&table).expect("logical projection");
+                assert_eq!(epoch, catalog.identity.logical_epoch);
+                assert_eq!(rows, catalog.identity.logical);
+            }
+            "physical_record_kinds.toml" => {
+                let (epoch, rows) = identity::physical_from(&table).expect("physical projection");
+                assert_eq!(epoch, catalog.identity.physical_epoch);
+                assert_eq!(rows, catalog.identity.physical);
+            }
+            "bootstrap_frames.toml" => {
+                let (epoch, rows) = identity::bootstrap_from(&table).expect("bootstrap projection");
+                assert_eq!(epoch, catalog.identity.bootstrap_epoch);
+                assert_eq!(rows, catalog.identity.bootstrap);
+            }
+            "prebootstrap_artifact_kinds.toml" => {
+                let (epoch, rows) =
+                    identity::prebootstrap_from(&table).expect("prebootstrap projection");
+                assert_eq!(epoch, catalog.identity.prebootstrap_epoch);
+                assert_eq!(rows, catalog.identity.prebootstrap);
+            }
+            "wire_types.toml" => {
+                let (epoch, rows) = identity::wire_from(&table).expect("wire projection");
+                assert_eq!(epoch, catalog.identity.wire_epoch);
+                assert_eq!(rows, catalog.identity.wire);
+            }
+            "durable_fields.toml" => {
+                let (epoch, fields, unions) =
+                    identity::fields_from(&table).expect("durable-field projection");
+                assert_eq!(epoch, catalog.identity.fields_epoch);
+                assert_eq!(fields, catalog.identity.fields);
+                assert_eq!(unions, catalog.identity.unions);
+            }
+            // The exact filename assertion above proves this arm unreachable;
+            // keep the match total without introducing a test-only panic site.
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn appendix_a_catalog_real_projections_match_generated() {
+    let catalog = real_appendix_catalog();
+    let violations = appendix_a::verify_projections(&repo_root(), &catalog);
+    assert!(
+        violations.is_empty(),
+        "checked-in projections must equal generated bytes: {violations:?}"
+    );
+}
+
+#[test]
+fn appendix_a_catalog_projection_diff_is_deterministic_and_located() {
+    let root = repo_root();
+    let mut catalog = real_appendix_catalog();
+    assert!(
+        appendix_a::verify_projections(&root, &catalog).is_empty(),
+        "baseline projections must be normalized before the mutation assertion"
+    );
+
+    catalog.identity.logical[0].max_size_bytes += 1;
+    let first = appendix_a::verify_projections(&root, &catalog);
+    let second = appendix_a::verify_projections(&root, &catalog);
+    assert_eq!(first, second, "projection divergence must be deterministic");
+    assert_eq!(first.len(), 1, "one logical-row mutation changes one file");
+    let violation = &first[0];
+    assert_eq!(violation.code, "projection_byte_diff");
+    assert_eq!(violation.row_id, "logical_object_kinds.toml");
+    for coordinate in ["byte ", "line ", "column "] {
+        assert!(
+            violation.msg.contains(coordinate),
+            "diff omits {coordinate:?}: {violation:?}"
+        );
+    }
+}
 
 #[test]
 fn idr_schema_valid_all_six() {

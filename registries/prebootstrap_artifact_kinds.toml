@@ -1,39 +1,4 @@
-# =============================================================================
-# prebootstrap_artifact_kinds.toml — identity class 4: restore artifacts
-# predating target K_oid
-# =============================================================================
-# Bead: fgdb-g0-identity-registries-hrx
-# Provenance: plan §5.1 (line 287); §11 restore machinery.
-#
-# Identity law:
-#   PreBootstrapArtifactId = BLAKE3("fgdb:restore-prebootstrap:v1"
-#     ‖ target_claim_or_reservation_domain ‖ artifact_kind ‖ schema_version
-#     ‖ canonical_wrapper_bytes)
-# with reference form PreBootstrapArtifactRef<T> {artifact_id,
-# authenticated_staging_locator, length, canonical_digest,
-# dispatch_root_generation} — legal ONLY in the registered restore staging
-# inode/root/capsule.
-#
-# The artifact's actual schema is the distinct wrapper
-# {import_target_schema_id_for_T, inner_canonical_bytes, inner_digest,
-# artifact_metadata}; T is a compile-time import-target phantom and does NOT
-# make the inner target schema inhabit this class.
-#
-# These IDs are never ObjectId, never accepted by StrongRef, never enter the
-# current-database mark set, and never authorize ordinary reads. Contents are
-# portable plans, status/receipt/refusal bytes, availability certificates,
-# lease-owner generations, wrapped-key artifacts, and proof material only —
-# NEVER plaintext keys. Once target K_oid exists, generated canonical-import
-# records decode/copy the inner bytes into the sole target-keyed logical
-# identity and prove a total artifact-to-logical-object/disposition
-# bijection; no canonical logical object retains a staging locator after the
-# import floor closes.
-#
-# Rows are reserved here (identity fixed); beads fgdb-a17..a21 populate the
-# wrapper schemas, claim domains, codecs, lifecycles, and cleanup floors.
-# Same code-space law as all class registries.
-# =============================================================================
-
+# GENERATED from appendix_a_catalog.toml; DO NOT EDIT THIS PROJECTION.
 schema_version = 1
 
 [registry]

@@ -73,6 +73,56 @@ log "building registry-check"
 (cd "$ROOT" && cargo build -p registry-check --quiet)
 [ -x "$BIN" ] || { log "registry-check binary missing at $BIN"; exit 2; }
 
+# --- Phase 0: canonical Appendix A source and projections -------------------
+log "phase 0: canonical Appendix A catalog, exact source, and six projections"
+if "$BIN" appendix --root "$ROOT" \
+    >"$WORK/appendix-baseline.jsonl" 2>"$WORK/appendix-baseline.err"; then
+  ok "canonical Appendix A catalog/source/projections validate cleanly"
+else
+  die "canonical Appendix A validation failed"
+fi
+if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
+    '"event":"appendix_source_manifest"' \
+    '"line_count":1271' \
+    '"byte_count":950186' \
+    '"outcome":"pass"'; then
+  ok "Appendix A exact source manifest is pinned"
+else
+  die "Appendix A source-manifest event is missing or drifted"
+fi
+APPENDIX_SLICE_PASSES=$(awk '
+  index($0, "\"event\":\"appendix_slice_checked\"") &&
+  index($0, "\"outcome\":\"pass\"") { count++ }
+  END { print count + 0 }
+' "$WORK/appendix-baseline.jsonl")
+[ "$APPENDIX_SLICE_PASSES" -eq 21 ] \
+  && ok "all 21 Appendix A slices validate" \
+  || die "expected 21 passing Appendix A slices, found $APPENDIX_SLICE_PASSES"
+APPENDIX_PROJECTION_PASSES=$(awk '
+  index($0, "\"event\":\"appendix_projection_checked\"") &&
+  index($0, "\"outcome\":\"pass\"") { count++ }
+  END { print count + 0 }
+' "$WORK/appendix-baseline.jsonl")
+[ "$APPENDIX_PROJECTION_PASSES" -eq 6 ] \
+  && ok "all six generated projections byte-match" \
+  || die "expected six passing Appendix A projections, found $APPENDIX_PROJECTION_PASSES"
+if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
+    '"event":"appendix_completed"' \
+    '"slices":21' \
+    '"projection_rows":128' \
+    '"projection_files":6' \
+    '"violations":0' \
+    '"outcome":"pass"'; then
+  ok "Appendix A catalog closure is exact"
+else
+  die "Appendix A completion event is missing or incomplete"
+fi
+if (cd "$ROOT" && cargo test -p registry-check hash::tests --lib --quiet); then
+  ok "SHA-256 standard vectors pass"
+else
+  die "SHA-256 standard vectors failed"
+fi
+
 # --- Phase 1: shipped identity registries validate ---------------------------
 log "phase 1: shipped identity registries (all six artifacts)"
 if "$BIN" identity --root "$ROOT" >"$WORK/identity-baseline.jsonl" 2>"$WORK/identity-baseline.err"; then
@@ -149,6 +199,35 @@ stage_except() { # stage_except <name> <basename> -> leave one output uncreated
     basename="${source##*/}"
     [ "$basename" = "$excluded" ] || cp "$source" "$WORK/$name/registries/"
   done
+}
+
+stage_appendix() { # stage_appendix <name> -> complete isolated Appendix root
+  local name="$1"
+  stage "$name"
+  cp "$ROOT/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md" "$WORK/$name/"
+}
+
+expect_appendix_violation() { # fixture code row_id
+  local fixture="$1"
+  local expected_code="$2"
+  local expected_row_id="$3"
+  local status
+  if "$BIN" appendix --root "$WORK/$fixture" \
+      >"$WORK/$fixture.jsonl" 2>"$WORK/$fixture.err"; then
+    die "$fixture unexpectedly passed Appendix validation"
+  else
+    status=$?
+    [ "$status" -eq 1 ] \
+      || die "$fixture exited $status instead of Appendix violation status 1"
+  fi
+  if jsonl_line_has_all "$WORK/$fixture.jsonl" \
+      '"event":"violation"' \
+      "\"code\":\"$expected_code\"" \
+      "\"row_id\":\"$expected_row_id\""; then
+    ok "$fixture rejected with $expected_code at $expected_row_id"
+  else
+    die "$fixture omitted $expected_code at $expected_row_id"
+  fi
 }
 
 expect_identity_violation() { # expect_identity_violation <fixture> <code> <registry> <row_id>
@@ -498,8 +577,75 @@ awk '
 expect_identity_violation \
   neg-union-role union_role_mismatch durable_fields MandatoryInventoryRef
 
+# --- Phase 3: Appendix source/catalog/projection mutation corpus ------------
+log "phase 3a: wrong Appendix slice Bead binding"
+stage_appendix neg-appendix-bead
+awk '
+  !changed && $0 == "bead_id = \"fgdb-a01-reference-roots-2k0q\"" {
+    print "bead_id = \"fgdb-a01-wrong-owner\""
+    changed = 1
+    next
+  }
+  { print }
+  END { if (!changed) exit 42 }
+' "$ROOT/registries/appendix_a_catalog.toml" \
+  > "$WORK/neg-appendix-bead/registries/appendix_a_catalog.toml"
+expect_appendix_violation neg-appendix-bead catalog_pin_mismatch a01
+
+log "phase 3b: exact Appendix source-byte drift"
+stage_appendix neg-appendix-source
+awk '
+  !changed && $0 == "## Appendix A — On-Disk Object Formats (normative contract)" {
+    print "## Appendix X — On-Disk Object Formats (normative contract)"
+    changed = 1
+    next
+  }
+  { print }
+  END { if (!changed) exit 42 }
+' "$ROOT/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md" \
+  > "$WORK/neg-appendix-source/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md"
+expect_appendix_violation \
+  neg-appendix-source source_sha256_mismatch source_manifest
+
+log "phase 3c: semantically invisible checked-in projection-byte drift"
+stage_appendix neg-appendix-projection
+printf '\n# planted byte-only projection drift\n' \
+  >> "$WORK/neg-appendix-projection/registries/logical_object_kinds.toml"
+expect_appendix_violation \
+  neg-appendix-projection projection_byte_diff logical_object_kinds.toml
+"$BIN" appendix --root "$WORK/neg-appendix-projection" \
+  >"$WORK/neg-appendix-projection-repeat.jsonl" \
+  2>"$WORK/neg-appendix-projection-repeat.err" || status=$?
+[ "${status:-0}" -eq 1 ] \
+  || die "repeat projection fixture did not exit with status 1"
+if cmp -s "$WORK/neg-appendix-projection.jsonl" \
+    "$WORK/neg-appendix-projection-repeat.jsonl"; then
+  ok "Appendix projection-diff JSONL is deterministic"
+else
+  die "Appendix projection-diff JSONL changed across identical runs"
+fi
+
+log "phase 3d: explicit projection generation is idempotent"
+stage_appendix appendix-generate
+if "$BIN" appendix-generate --root "$WORK/appendix-generate" \
+    >"$WORK/appendix-generate-first.jsonl" \
+    2>"$WORK/appendix-generate-first.err" &&
+   "$BIN" appendix-generate --root "$WORK/appendix-generate" \
+    >"$WORK/appendix-generate-second.jsonl" \
+    2>"$WORK/appendix-generate-second.err"; then
+  ok "Appendix projections generate successfully twice"
+else
+  die "Appendix projection generation failed"
+fi
+if cmp -s "$WORK/appendix-generate-first.jsonl" \
+    "$WORK/appendix-generate-second.jsonl"; then
+  ok "Appendix projection generation JSONL and bytes are idempotent"
+else
+  die "Appendix projection generation changed across identical runs"
+fi
+
 # --- Verdict -----------------------------------------------------------------
-log "evidence: $WORK/{identity-baseline,neg-future,neg-placement,neg-experimental,neg-recipe,neg-schema-version,neg-unknown-top-level,neg-unknown-row,neg-registry-epoch,neg-released-reuse,neg-missing-union-arm,neg-extra-union-arm,neg-union-role}.jsonl"
+log "evidence: $WORK/{appendix-baseline,identity-baseline,neg-future,neg-placement,neg-experimental,neg-recipe,neg-schema-version,neg-unknown-top-level,neg-unknown-row,neg-registry-epoch,neg-released-reuse,neg-missing-union-arm,neg-extra-union-arm,neg-union-role,neg-appendix-bead,neg-appendix-source,neg-appendix-projection,appendix-generate-first,appendix-generate-second}.jsonl"
 log "result: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 log "G0 identity e2e: ALL GREEN"

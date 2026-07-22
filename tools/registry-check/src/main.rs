@@ -9,8 +9,11 @@
 //!   registry-check closure  --root <repo-root> --manifest <path>
 //!   registry-check hash     --root <repo-root>
 //!   registry-check identity --root <repo-root>
+//!   registry-check appendix --root <repo-root>
+//!   registry-check appendix-generate --root <repo-root>
 //!   registry-check all      --root <repo-root> [--manifest <path>]
 
+use registry_check::appendix_a;
 use registry_check::closure;
 use registry_check::hash::id_table_hash;
 use registry_check::identity;
@@ -53,8 +56,14 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn usage() -> String {
-    "usage: registry-check <validate|lint|closure|hash|identity|all> --root <repo-root> [--manifest <path>]"
-        .to_string()
+    concat!(
+        "usage: registry-check ",
+        "<validate|lint|closure|hash|identity|appendix|appendix-generate|all> ",
+        "--root <repo-root> [--manifest <path>]\n",
+        "  appendix           verify the Appendix A catalog, source, and checked-in projections\n",
+        "  appendix-generate  explicitly rewrite and byte-verify the six Appendix A projections"
+    )
+    .to_string()
 }
 
 fn identity_row_faults(violations: &[Violation], row_id: &str) -> usize {
@@ -66,6 +75,293 @@ fn identity_row_faults(violations: &[Violation], row_id: &str) -> usize {
 
 fn numeric_array(values: &[i64]) -> JsonValue {
     JsonValue::Array(values.iter().copied().map(JsonValue::Int).collect())
+}
+
+fn appendix_violation_message(violation: &appendix_a::Violation) -> String {
+    match violation.code.as_str() {
+        "catalog_read" => "cannot read the canonical Appendix A catalog".to_string(),
+        "source_read" => "cannot read the canonical Appendix A plan source".to_string(),
+        "projection_read" => format!(
+            "cannot read checked-in Appendix A projection {:?}",
+            violation.row_id
+        ),
+        _ => violation.msg.clone(),
+    }
+}
+
+fn appendix_has_structural_error(violations: &[appendix_a::Violation]) -> bool {
+    violations.iter().any(|violation| {
+        matches!(
+            violation.code.as_str(),
+            "catalog_read"
+                | "catalog_encoding"
+                | "catalog_toml_parse"
+                | "catalog_schema"
+                | "source_read"
+                | "projection_read"
+        )
+    })
+}
+
+fn emit_appendix_violations(violations: &[appendix_a::Violation]) {
+    for violation in violations {
+        let msg = appendix_violation_message(violation);
+        println!(
+            "{}",
+            event(&[
+                ("event", s("violation")),
+                ("code", s(&violation.code)),
+                ("registry", s(appendix_a::CATALOG_NAME)),
+                ("row_id", s(&violation.row_id)),
+                ("msg", s(&msg)),
+            ])
+        );
+        eprintln!(
+            "violation[{}] {}::{}: {}",
+            violation.code,
+            appendix_a::CATALOG_NAME,
+            violation.row_id,
+            msg
+        );
+    }
+}
+
+fn finish_appendix_load_failure(
+    completion_event: &str,
+    violations: &[appendix_a::Violation],
+) -> Result<usize, String> {
+    emit_appendix_violations(violations);
+    let structural = appendix_has_structural_error(violations);
+    println!(
+        "{}",
+        event(&[
+            ("event", s(completion_event)),
+            ("slices", n(0)),
+            ("projection_rows", n(0)),
+            ("projection_files", n(0)),
+            ("violations", n(violations.len() as i64)),
+            ("outcome", s(if structural { "error" } else { "fail" })),
+        ])
+    );
+    if structural {
+        Err("Appendix A structural load failed; see redacted violation events".to_string())
+    } else {
+        Ok(violations.len())
+    }
+}
+
+fn emit_appendix_catalog(
+    catalog: &appendix_a::Catalog,
+    projection_violations: &[appendix_a::Violation],
+) {
+    let manifest = &catalog.source_manifest;
+    println!(
+        "{}",
+        event(&[
+            ("event", s("appendix_source_manifest")),
+            ("catalog", s(appendix_a::CATALOG_PATH)),
+            ("plan_path", s(&manifest.plan_path)),
+            ("start_line", n(manifest.start_line)),
+            ("end_line", n(manifest.end_line)),
+            ("line_count", n(manifest.line_count)),
+            ("byte_count", n(manifest.byte_count)),
+            ("sha256", s(&manifest.sha256)),
+            ("heading", s(&manifest.heading)),
+            ("next_heading", s(&manifest.next_heading)),
+            ("source_encoding", s(&catalog.source_encoding)),
+            ("hash_algorithm", s(&catalog.hash_algorithm)),
+            ("outcome", s("pass")),
+        ])
+    );
+
+    for slice in &catalog.slices {
+        println!(
+            "{}",
+            event(&[
+                ("event", s("appendix_slice_checked")),
+                ("ordinal", n(slice.ordinal)),
+                ("row_id", s(&slice.id)),
+                ("bead_id", s(&slice.bead_id)),
+                ("title", s(&slice.title)),
+                ("start_line", n(slice.start_line)),
+                ("end_line", n(slice.end_line)),
+                ("line_count", n(slice.line_count)),
+                ("byte_count", n(slice.byte_count)),
+                ("sha256", s(&slice.sha256)),
+                ("predecessor", s(&slice.predecessor)),
+                ("successor", s(&slice.successor)),
+                (
+                    "expected_projection_classes",
+                    arr(slice.expected_projection_classes.clone()),
+                ),
+                ("definition_status", s(&slice.definition_status)),
+                ("outcome", s("pass")),
+            ])
+        );
+    }
+
+    for (registry, file) in appendix_a::PROJECTION_FILES {
+        let rows = catalog
+            .projection_rows
+            .iter()
+            .filter(|row| row.projection == registry)
+            .count();
+        let registry_epoch = catalog
+            .projection_epochs
+            .get(registry)
+            .copied()
+            .unwrap_or_default();
+        let violations = projection_violations
+            .iter()
+            .filter(|violation| violation.row_id == file)
+            .count();
+        println!(
+            "{}",
+            event(&[
+                ("event", s("appendix_projection_checked")),
+                ("registry", s(registry)),
+                ("file", s(file)),
+                ("rows", n(rows as i64)),
+                ("registry_epoch", n(registry_epoch)),
+                ("violations", n(violations as i64)),
+                ("outcome", s(if violations == 0 { "pass" } else { "fail" }),),
+            ])
+        );
+    }
+}
+
+/// Verify Appendix A without mutating its generated consumer registries.
+fn run_appendix(root: &Path) -> Result<usize, String> {
+    let catalog = match appendix_a::load_and_verify(root) {
+        Ok(catalog) => catalog,
+        Err(violations) => return finish_appendix_load_failure("appendix_completed", &violations),
+    };
+    let violations = appendix_a::verify_projections(root, &catalog);
+    emit_appendix_catalog(&catalog, &violations);
+    emit_appendix_violations(&violations);
+    let structural = appendix_has_structural_error(&violations);
+    println!(
+        "{}",
+        event(&[
+            ("event", s("appendix_completed")),
+            ("slices", n(catalog.slices.len() as i64)),
+            ("projection_rows", n(catalog.projection_rows.len() as i64),),
+            (
+                "projection_files",
+                n(appendix_a::PROJECTION_FILES.len() as i64),
+            ),
+            ("violations", n(violations.len() as i64)),
+            (
+                "outcome",
+                s(if structural {
+                    "error"
+                } else if violations.is_empty() {
+                    "pass"
+                } else {
+                    "fail"
+                }),
+            ),
+        ])
+    );
+    if structural {
+        Err("Appendix A projection load failed; see redacted violation events".to_string())
+    } else {
+        Ok(violations.len())
+    }
+}
+
+/// Explicitly regenerate Appendix A consumer registries, then byte-verify them.
+fn run_appendix_generate(root: &Path) -> Result<usize, String> {
+    let catalog = match appendix_a::load_and_verify(root) {
+        Ok(catalog) => catalog,
+        Err(violations) => {
+            return finish_appendix_load_failure("appendix_generation_completed", &violations);
+        }
+    };
+    if appendix_a::write_projections(root, &catalog).is_err() {
+        let violation = appendix_a::Violation {
+            code: "projection_write".to_string(),
+            row_id: "projection_files".to_string(),
+            msg: "cannot write one or more checked-in Appendix A projections".to_string(),
+        };
+        emit_appendix_violations(std::slice::from_ref(&violation));
+        println!(
+            "{}",
+            event(&[
+                ("event", s("appendix_generation_completed")),
+                ("projection_files", n(0)),
+                ("violations", n(1)),
+                ("outcome", s("error")),
+            ])
+        );
+        return Err("Appendix A projection generation failed".to_string());
+    }
+
+    let violations = appendix_a::verify_projections(root, &catalog);
+    let generated = appendix_a::generated_projections(&catalog);
+    for ((file, contents), (registry, _expected_file)) in
+        generated.into_iter().zip(appendix_a::PROJECTION_FILES)
+    {
+        let rows = catalog
+            .projection_rows
+            .iter()
+            .filter(|row| row.projection == registry)
+            .count();
+        let file_violations = violations
+            .iter()
+            .filter(|violation| violation.row_id == file)
+            .count();
+        println!(
+            "{}",
+            event(&[
+                ("event", s("appendix_projection_generated")),
+                ("registry", s(registry)),
+                ("file", s(&file)),
+                ("rows", n(rows as i64)),
+                ("byte_count", n(contents.len() as i64)),
+                (
+                    "sha256",
+                    s(registry_check::hash::sha256_hex(contents.as_bytes())),
+                ),
+                ("violations", n(file_violations as i64)),
+                (
+                    "outcome",
+                    s(if file_violations == 0 { "pass" } else { "fail" }),
+                ),
+            ])
+        );
+    }
+    emit_appendix_violations(&violations);
+    let structural = appendix_has_structural_error(&violations);
+    println!(
+        "{}",
+        event(&[
+            ("event", s("appendix_generation_completed")),
+            (
+                "projection_files",
+                n(appendix_a::PROJECTION_FILES.len() as i64),
+            ),
+            ("violations", n(violations.len() as i64)),
+            (
+                "outcome",
+                s(if structural {
+                    "error"
+                } else if violations.is_empty() {
+                    "pass"
+                } else {
+                    "fail"
+                }),
+            ),
+        ])
+    );
+    if structural {
+        Err(
+            "Appendix A generated projection load failed; see redacted violation events"
+                .to_string(),
+        )
+    } else {
+        Ok(violations.len())
+    }
 }
 
 fn identity_violation_diff(
@@ -737,6 +1033,11 @@ fn run_closure(r: &Registries, manifest_path: &Path) -> Result<usize, String> {
 
 fn run() -> Result<usize, String> {
     let args = parse_args()?;
+    match args.command.as_str() {
+        "appendix" => return run_appendix(&args.root),
+        "appendix-generate" => return run_appendix_generate(&args.root),
+        _ => {}
+    }
     let r = load(&args.root)?;
     match args.command.as_str() {
         "validate" => Ok(run_validate(&r, &args.root)),
@@ -751,6 +1052,7 @@ fn run() -> Result<usize, String> {
             let mut failures = run_validate(&r, &args.root);
             failures += run_hash(&r);
             failures += run_identity(&args.root)?;
+            failures += run_appendix(&args.root)?;
             failures += run_lint(&r, &args.root)?;
             let manifest = args
                 .manifest

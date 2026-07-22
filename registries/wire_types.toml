@@ -1,31 +1,4 @@
-# =============================================================================
-# wire_types.toml — identity class 5: embedded canonical types and closed tags
-# =============================================================================
-# Bead: fgdb-g0-identity-registries-hrx
-# Provenance: plan §5.1 (line 288); Appendix A/D.
-#
-# Every inline record, enum/union variant, discriminant, spec-body tag,
-# reference wrapper, and framing type used inside the other identity classes
-# has one stable, nonreusable `wire_type_id: u16`, and each union variant
-# additionally carries its exact containing-union `wire_tag: u16`.
-#
-# An inline type is NOT independently reachable and cannot be named by
-# StrongRef unless it is separately promoted to a top-level logical schema
-# with a distinct logical_object_kinds row. There is no prose catch-all
-# variant: the generated SequenceNeutralSpec, role-command, checkpoint-
-# vector, restore-state, and projection-slot inventories come from this
-# registry (populated by g0-command-contracts and the a-series beads).
-#
-# `kind` values: record | union | union_variant | reference_wrapper |
-# discriminant | framing.
-# Generated reference unions (LocalCommandInputRef, ...) are NOT rows here —
-# they are [[reference_union]] declarations in durable_fields.toml, generated
-# per containing schema and role. exact_wire_type resolution order is:
-# builtin scalar -> wire_types row -> reference_union.
-#
-# Same code-space law as all class registries.
-# =============================================================================
-
+# GENERATED from appendix_a_catalog.toml; DO NOT EDIT THIS PROJECTION.
 schema_version = 1
 
 [registry]
