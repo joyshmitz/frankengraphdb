@@ -162,6 +162,35 @@ kind = "script"
 artifact = "scripts/g0_architecture_decisions_e2e.sh"
 status = "live"
 
+# Full verification-label identities. Architecture decisions use these exact
+# symbols so a human-friendly label cannot silently resolve to a different
+# checker or target. The legacy short symbols above remain for existing claim
+# registry references; these rows are the ADR verification declarations.
+
+[[checker]]
+symbol = "cargo-test:architecture_decisions"
+kind = "cargo-test"
+artifact = "tools/registry-check/tests/architecture_decisions.rs"
+status = "live"
+
+[[checker]]
+symbol = "cargo-test:claims"
+kind = "cargo-test"
+artifact = "tools/registry-check/tests/claims.rs"
+status = "live"
+
+[[checker]]
+symbol = "cargo-test:proof-lane-resolution"
+kind = "cargo-test"
+artifact = "tools/registry-check/tests/claims.rs"
+status = "live"
+
+[[checker]]
+symbol = "e2e:g0_architecture_decisions"
+kind = "script"
+artifact = "scripts/g0_architecture_decisions_e2e.sh"
+status = "live"
+
 # --- Identity-constitution byte-level walkers (stub-registered; each becomes
 # --- live with its phase-correct downstream owner and planned test artifact).
 

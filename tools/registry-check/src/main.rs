@@ -94,6 +94,8 @@ fn appendix_violation_row_id(violation: &appendix_a::Violation) -> &str {
             | "catalog_rows"
             | "source_manifest"
             | "reference_manifest"
+            | "target_manifest"
+            | "repository_bindings"
             | "slice_manifest"
             | "projection_rows"
             | "projection_files"
@@ -249,6 +251,24 @@ fn emit_appendix_catalog(
         ])
     );
 
+    let targets = &catalog.target_manifest;
+    println!(
+        "{}",
+        event(&[
+            ("event", s("appendix_target_manifest")),
+            ("target_count", n(targets.target_count)),
+            (
+                "projection_fallback_count",
+                n(targets.projection_fallback_count),
+            ),
+            (
+                "target_source_assignment_sha256",
+                s(&targets.target_source_assignment_sha256),
+            ),
+            ("outcome", s("pass")),
+        ])
+    );
+
     for slice in &catalog.slices {
         println!(
             "{}",
@@ -294,10 +314,7 @@ fn emit_appendix_catalog(
                     s(&slice.arm_candidate_ids_sha256),
                 ),
                 ("ambiguity_count", n(slice.ambiguity_count)),
-                (
-                    "ambiguity_ids_sha256",
-                    s(&slice.ambiguity_ids_sha256),
-                ),
+                ("ambiguity_ids_sha256", s(&slice.ambiguity_ids_sha256),),
                 ("outcome", s("pass")),
             ])
         );

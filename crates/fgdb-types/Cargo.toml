@@ -1,0 +1,9 @@
+[package]
+name = "fgdb-types"
+version = "0.0.1"
+edition.workspace = true
+description = "Core identity newtypes, bounded bytes, the typed reference family, and the canonical scalar value union (plan §8.6, Appendix A reference semantics; bead fgdb-w1-foundation-types-tjk)."
+publish = false
+
+[lints]
+workspace = true

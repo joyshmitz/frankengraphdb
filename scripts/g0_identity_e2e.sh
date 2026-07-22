@@ -83,13 +83,36 @@ else
 fi
 if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
     '"event":"appendix_source_manifest"' \
-    '"line_count":1271' \
-    '"byte_count":950365' \
-    '"sha256":"db855855638b3df0001ccd2a7f0801943bb33ed59291421497149f71196201ff"' \
+    '"start_line":1388' \
+    '"end_line":2728' \
+    '"line_count":1341' \
+    '"byte_count":1020717' \
+    '"sha256":"71a48b67304f94568590f79c5b1c1ee4731819aee022c57fece78a7e72bce7f1"' \
     '"outcome":"pass"'; then
   ok "Appendix A exact source manifest is pinned"
 else
   die "Appendix A source-manifest event is missing or drifted"
+fi
+if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
+    '"event":"appendix_reference_manifest"' \
+    '"target_count":813' \
+    '"target_ids_sha256":"84276b6d97342e9ec1619424ddacb5b429e98e1862e03359afc837b65bb3392e"' \
+    '"occurrence_count":2458' \
+    '"occurrence_transcript_sha256":"9878e84c7c72d0e098a66794ce56a00ffdfed62aaf251bc0d87efd665e0a630b"' \
+    '"outcome":"pass"'; then
+  ok "full-plan Appendix A reference census is pinned"
+else
+  die "Appendix A reference-manifest event is missing or drifted"
+fi
+if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
+    '"event":"appendix_target_manifest"' \
+    '"target_count":128' \
+    '"projection_fallback_count":83' \
+    '"target_source_assignment_sha256":"27b3182b3b35da2321982e51816baec66829f9df22b7005d8dbc523ffdd8110d"' \
+    '"outcome":"pass"'; then
+  ok "Appendix A target/source assignments are release-pinned"
+else
+  die "Appendix A target-manifest event is missing or drifted"
 fi
 APPENDIX_SLICE_PASSES=$(awk '
   index($0, "\"event\":\"appendix_slice_checked\"") &&
@@ -109,19 +132,21 @@ APPENDIX_PROJECTION_PASSES=$(awk '
   || die "expected six passing Appendix A projections, found $APPENDIX_PROJECTION_PASSES"
 if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
     '"event":"appendix_closure_checked"' \
-    '"reservations":716' \
-    '"existing_reservations":14' \
-    '"reserved_reservations":702' \
-    '"source_dispositions":751' \
-    '"bindings":844' \
-    '"statuses":844' \
-    '"unresolved_source_symbols":1' \
-    '"appendix_defined_symbols":458' \
-    '"external_definition_symbols":257' \
-    '"source_location_pairs":1724' \
+    '"reservations":813' \
+    '"existing_reservations":15' \
+    '"reserved_reservations":798' \
+    '"source_dispositions":848' \
+    '"top_level_candidates":1229' \
+    '"targets":128' \
+    '"semantic_bindings":0' \
+    '"evidence_rows":0' \
+    '"reference_only_symbols":343' \
+    '"appendix_structural_symbols":314' \
+    '"outside_structural_symbols":0' \
+    '"source_location_pairs":1999' \
     '"g0_projection_dispositions":35' \
     '"outcome":"pass"'; then
-  ok "Appendix A type/owner/evidence closure is exact"
+  ok "Appendix A source/target/owner/evidence scaffold closure is exact"
 else
   die "Appendix A closure event is missing or drifted"
 fi
@@ -130,11 +155,13 @@ if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
     '"slices":21' \
     '"projection_rows":128' \
     '"projection_files":6' \
-    '"reservations":716' \
-    '"source_dispositions":751' \
-    '"bindings":844' \
-    '"statuses":844' \
-    '"unresolved_source_symbols":1' \
+    '"reservations":813' \
+    '"source_dispositions":848' \
+    '"top_level_candidates":1229' \
+    '"targets":128' \
+    '"semantic_bindings":0' \
+    '"evidence_rows":0' \
+    '"reference_only_symbols":343' \
     '"violations":0' \
     '"outcome":"pass"'; then
   ok "Appendix A catalog closure is exact"
@@ -228,6 +255,8 @@ stage_except() { # stage_except <name> <basename> -> leave one output uncreated
 stage_appendix() { # stage_appendix <name> -> complete isolated Appendix root
   local name="$1"
   stage "$name"
+  mkdir -p "$WORK/$name/.beads"
+  cp "$ROOT/.beads/issues.jsonl" "$WORK/$name/.beads/"
   cp "$ROOT/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md" "$WORK/$name/"
 }
 
@@ -657,7 +686,8 @@ awk -v sentinel="$APPENDIX_SECRET_SENTINEL" '
   END { if (!title_changed || !row_changed) exit 42 }
 ' "$ROOT/registries/appendix_a_catalog.toml" \
   > "$WORK/neg-appendix-redaction/registries/appendix_a_catalog.toml"
-expect_appendix_violation neg-appendix-redaction catalog_pin_mismatch a01
+expect_appendix_violation \
+  neg-appendix-redaction catalog_row_id_derived_mismatch catalog_row
 if grep -Fq "$APPENDIX_SECRET_SENTINEL" \
     "$WORK/neg-appendix-redaction.jsonl" \
     "$WORK/neg-appendix-redaction.err"; then
@@ -728,7 +758,11 @@ sha256sum \
 if cmp -s "$WORK/neg-appendix-generate-write-before.sha256" \
     "$WORK/neg-appendix-generate-write-after.sha256" &&
    jsonl_line_has_all "$WORK/neg-appendix-generate-write.jsonl" \
+    '"event":"violation"' \
     '"code":"projection_byte_diff"' \
+    '"row_id":"logical_object_kinds.toml"' &&
+   jsonl_line_has_all "$WORK/neg-appendix-generate-write.jsonl" \
+    '"event":"appendix_generation_completed"' \
     '"outcome":"fail"'; then
   ok "Appendix generation rejects drift without writing any projection"
 else
@@ -771,32 +805,33 @@ else
   die "Appendix projection verification changed JSONL or checked-in bytes"
 fi
 
-log "phase 3e: exact owner binding is mandatory"
-stage_appendix neg-appendix-owner
+log "phase 3e: every checked-in projection requires one target"
+stage_appendix neg-appendix-target
 awk '
-  !changed && $0 == "owner_bead_id = \"fgdb-a01-reference-roots-2k0q\"" {
-    print "owner_bead_id = \"fgdb-a01-wrong-owner\""
-    changed = 1
-    next
-  }
-  { print }
-  END { if (!changed) exit 42 }
-' "$ROOT/registries/appendix_a_catalog.toml" \
-  > "$WORK/neg-appendix-owner/registries/appendix_a_catalog.toml"
-expect_appendix_violation \
-  neg-appendix-owner catalog_owner_mismatch catalog_row
-
-log "phase 3f: every primary target requires one status row"
-stage_appendix neg-appendix-status
-awk '
-  !removed && $0 == "[[status]]" { removed = 1; skipping = 1; next }
+  !removed && $0 == "[[target]]" { removed = 1; skipping = 1; next }
   skipping && /^\[\[/ { skipping = 0 }
   !skipping { print }
   END { if (!removed) exit 42 }
 ' "$ROOT/registries/appendix_a_catalog.toml" \
-  > "$WORK/neg-appendix-status/registries/appendix_a_catalog.toml"
+  > "$WORK/neg-appendix-target/registries/appendix_a_catalog.toml"
 expect_appendix_violation \
-  neg-appendix-status catalog_metadata_count status
+  neg-appendix-target catalog_projection_target_missing \
+  catalog_row
+
+log "phase 3f: catalog-maintenance owners cannot masquerade as semantic owners"
+stage_appendix neg-appendix-semantic-owner
+cat >> "$WORK/neg-appendix-semantic-owner/registries/appendix_a_catalog.toml" <<'EOF'
+
+[[semantic_binding]]
+row_id = "a01:semantic-binding:bootstrap-frame-root-slot"
+target_row_id = "a01:bootstrap-frame:root-slot"
+owner_bead_id = "fgdb-appendix-a-catalog-scaffold-gvvf"
+owner_crate = "registry-check"
+consumer_crates = ["fgdb"]
+EOF
+expect_appendix_violation \
+  neg-appendix-semantic-owner catalog_semantic_owner_invalid \
+  catalog_row
 
 log "phase 3g: row IDs are derived from typed projection identity"
 stage_appendix neg-appendix-row-id
@@ -835,27 +870,188 @@ awk '
 expect_appendix_violation \
   neg-appendix-g0-owner g0_projection_allowlist_drift g0
 
-log "phase 3i: unresolved-family partition is release-pinned"
-stage_appendix neg-appendix-unresolved
+log "phase 3i: a declared slice cannot become vacuously complete"
+stage_appendix neg-appendix-complete
 awk '
-  $0 == "symbol = \"ActivatedDeltaRetentionCut\"" { target = 1 }
-  target && $0 == "disposition = \"external-definition\"" {
-    print "disposition = \"unresolved\""
+  $0 == "id = \"a02\"" { in_slice = 1 }
+  in_slice && !changed && $0 == "definition_status = \"declared\"" {
+    print "definition_status = \"complete\""
     changed = 1
-    target = 0
+    in_slice = 0
     next
   }
   { print }
   END { if (!changed) exit 42 }
 ' "$ROOT/registries/appendix_a_catalog.toml" \
-  > "$WORK/neg-appendix-unresolved/registries/appendix_a_catalog.toml"
+  > "$WORK/neg-appendix-complete/registries/appendix_a_catalog.toml"
 expect_appendix_violation \
-  neg-appendix-unresolved catalog_source_disposition_partition unresolved
+  neg-appendix-complete complete_slice_ambiguity a02
 
-log "phase 3k: unknown catalog keys are structural load failures"
+log "phase 3j: full-plan reference occurrence drift fails closed"
+stage_appendix neg-appendix-reference-source
+awk '
+  NR < 1388 && !changed && index($0, "StrongRef<") {
+    sub(/StrongRef</, "StrongRefX<")
+    changed = 1
+  }
+  { print }
+  END { if (!changed) exit 42 }
+' "$ROOT/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md" \
+  > "$WORK/neg-appendix-reference-source/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md"
+expect_appendix_violation \
+  neg-appendix-reference-source reference_source_manifest_mismatch \
+  reference_manifest
+
+log "phase 3j-target: exact target/source assignments cannot be downgraded"
+stage_appendix neg-appendix-target-assignment
+awk '
+  !changed && $0 == "source_key = \"field|RootSlot|RootSlot.cluster_incarnation|cluster_incarnation\"" {
+    print "source_key = \"projection|durable_fields|RootSlot.cluster_incarnation\""
+    changed = 1
+    next
+  }
+  { print }
+  END { if (!changed) exit 42 }
+' "$ROOT/registries/appendix_a_catalog.toml" \
+  > "$WORK/neg-appendix-target-assignment/registries/appendix_a_catalog.toml"
+expect_appendix_violation \
+  neg-appendix-target-assignment catalog_target_source_assignment_drift \
+  target_manifest
+
+log "phase 3j-owner: reservation ownership is derived from source"
+stage_appendix neg-appendix-source-owner
+awk '
+  $0 == "row_id = \"plan:reservation:valid-time-contract\"" {
+    print "row_id = \"a21:reservation:valid-time-contract\""
+    reservation = 1
+    changed++
+    next
+  }
+  reservation && $0 == "slice_id = \"plan\"" {
+    print "slice_id = \"a21\""
+    reservation = 0
+    changed++
+    next
+  }
+  $0 == "row_id = \"plan:source-symbol-disposition:valid-time-contract\"" {
+    print "row_id = \"a21:source-symbol-disposition:valid-time-contract\""
+    disposition = 1
+    changed++
+    next
+  }
+  disposition && $0 == "slice_id = \"plan\"" {
+    print "slice_id = \"a21\""
+    disposition = 0
+    changed++
+    next
+  }
+  { print }
+  END { if (changed != 4 || reservation || disposition) exit 42 }
+' "$ROOT/registries/appendix_a_catalog.toml" \
+  > "$WORK/neg-appendix-source-owner/registries/appendix_a_catalog.toml"
+expect_appendix_violation \
+  neg-appendix-source-owner reference_source_reservation_owner_mismatch \
+  catalog_row
+
+log "phase 3j-bindings: fabricated repository metadata cannot self-assert"
+stage_appendix neg-appendix-repository-bindings
+cat >> "$WORK/neg-appendix-repository-bindings/registries/appendix_a_catalog.toml" <<'EOF'
+
+[[semantic_binding]]
+row_id = "a01:semantic-binding:bootstrap-frame-root-slot"
+target_row_id = "a01:bootstrap-frame:root-slot"
+owner_bead_id = "fgdb-nonexistent-owner-z999"
+owner_crate = "fgdb-nonexistent-owner-crate"
+consumer_crates = ["fgdb-nonexistent-consumer-crate"]
+
+[[evidence]]
+row_id = "a01:evidence:bootstrap-frame-root-slot-static-contract"
+target_row_id = "a01:bootstrap-frame:root-slot"
+evidence_id = "static-contract"
+phase = "static"
+status = "live"
+owner_bead_id = "fgdb-nonexistent-evidence-z999"
+checker_ids = ["nonexistent_checker"]
+scenario_ids = ["nonexistent_scenario"]
+event_ids = ["nonexistent_event"]
+gate_ids = ["G0"]
+EOF
+expect_appendix_violation \
+  neg-appendix-repository-bindings catalog_semantic_owner_bead_unresolved \
+  catalog_row
+for code in \
+  catalog_semantic_owner_crate_unresolved \
+  catalog_semantic_consumer_crate_unresolved \
+  catalog_evidence_owner_bead_unresolved \
+  catalog_evidence_checker_unresolved \
+  catalog_evidence_scenario_unresolved \
+  catalog_evidence_event_unresolved \
+  catalog_evidence_gate_unresolved; do
+  if grep -q "\"code\":\"$code\"" \
+      "$WORK/neg-appendix-repository-bindings.jsonl"; then
+    ok "fabricated metadata rejected with $code"
+  else
+    die "fabricated metadata omitted $code"
+  fi
+done
+
+log "phase 3j-annotation: placeholder annotations cannot self-assert"
+stage_appendix neg-appendix-annotation-placeholder
+cat >> "$WORK/neg-appendix-annotation-placeholder/registries/appendix_a_catalog.toml" <<'EOF'
+
+[[annotation]]
+row_id = "a01:annotation:bootstrap-frame-root-slot"
+target_row_id = "a01:bootstrap-frame:root-slot"
+exact_type = "StrongRef<T>"
+cardinality = "one"
+layout = "fixed"
+role = "Role"
+posture = "bootstrap"
+authority = "root"
+locality = "local"
+generic_expansions = ["RootSlot"]
+role_expansions = ["Local"]
+reference_semantics = "strong"
+target_schema_ids = ["NonexistentSchema"]
+construction_order = "root-first"
+retention_and_cut_rule = "TODO"
+digest_recipe = "slot-checksum"
+redaction_class = "public-commitment"
+resource_bounds = "fixed-4096-bytes"
+compatibility = "v1"
+EOF
+expect_appendix_violation \
+  neg-appendix-annotation-placeholder catalog_annotation_placeholder \
+  catalog_row
+if grep -q '"code":"catalog_annotation_target_schema_unresolved"' \
+    "$WORK/neg-appendix-annotation-placeholder.jsonl" &&
+   grep -q '"code":"catalog_annotation_reference_invalid"' \
+    "$WORK/neg-appendix-annotation-placeholder.jsonl"; then
+  ok "placeholder annotation also rejects unknown schema and non-concrete StrongRef"
+else
+  die "placeholder annotation omitted schema/reference diagnostics"
+fi
+
+log "phase 3k: maintenance proof ownership and evidence are release-pinned"
+stage_appendix neg-appendix-maintenance
+awk '
+  !changed && $0 == "owner_crate = \"registry-check\"" {
+    print "owner_crate = \"fgdb-warden\""
+    changed = 1
+    next
+  }
+  { print }
+  END { if (!changed) exit 42 }
+' "$ROOT/registries/appendix_a_catalog.toml" \
+  > "$WORK/neg-appendix-maintenance/registries/appendix_a_catalog.toml"
+expect_appendix_violation \
+  neg-appendix-maintenance catalog_maintenance_proof_mismatch \
+  catalog_row
+
+log "phase 3l: unknown catalog keys are structural load failures"
 stage_appendix neg-appendix-unknown-key
 awk '
-  !changed && $0 == "schema_version = 1" {
+  !changed && $0 == "schema_version = 2" {
     print
     print "unknown_catalog_root = true"
     changed = 1
@@ -868,7 +1064,7 @@ awk '
 expect_appendix_structural_error \
   neg-appendix-unknown-key catalog_unknown_key catalog
 
-log "phase 3l: malformed projection schemas are structural load failures"
+log "phase 3m: malformed projection schemas are structural load failures"
 stage_appendix neg-appendix-projection-schema
 awk '
   !changed && $0 == "[[logical_kind]]" {
@@ -885,7 +1081,7 @@ expect_appendix_structural_error \
   neg-appendix-projection-schema catalog_projection_schema logical_object_kinds
 
 # --- Verdict -----------------------------------------------------------------
-log "evidence: $WORK/{appendix-baseline,identity-baseline,neg-future,neg-placement,neg-experimental,neg-recipe,neg-schema-version,neg-unknown-top-level,neg-unknown-row,neg-registry-epoch,neg-released-reuse,neg-missing-union-arm,neg-extra-union-arm,neg-union-role,neg-appendix-bead,neg-appendix-source,neg-appendix-projection,neg-appendix-owner,neg-appendix-status,neg-appendix-row-id,neg-appendix-g0-owner,neg-appendix-unresolved,neg-appendix-unknown-key,neg-appendix-projection-schema,neg-appendix-generate-write,appendix-generate-first,appendix-generate-second}.jsonl"
+log "evidence: $WORK/{appendix-baseline,identity-baseline,neg-future,neg-placement,neg-experimental,neg-recipe,neg-schema-version,neg-unknown-top-level,neg-unknown-row,neg-registry-epoch,neg-released-reuse,neg-missing-union-arm,neg-extra-union-arm,neg-union-role,neg-appendix-bead,neg-appendix-redaction,neg-appendix-source,neg-appendix-projection,neg-appendix-target,neg-appendix-semantic-owner,neg-appendix-row-id,neg-appendix-g0-owner,neg-appendix-complete,neg-appendix-reference-source,neg-appendix-target-assignment,neg-appendix-source-owner,neg-appendix-repository-bindings,neg-appendix-annotation-placeholder,neg-appendix-maintenance,neg-appendix-unknown-key,neg-appendix-projection-schema,neg-appendix-generate-write,appendix-generate-first,appendix-generate-second}.jsonl"
 log "result: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 log "G0 identity e2e: ALL GREEN"

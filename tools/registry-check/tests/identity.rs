@@ -222,8 +222,8 @@ fn appendix_a_catalog_parse_is_closed_and_versioned() {
         (
             "unknown root",
             source.replacen(
-                "schema_version = 1",
-                "schema_version = 1\nunknown_root_key = true",
+                "schema_version = 2",
+                "schema_version = 2\nunknown_root_key = true",
                 1,
             ),
             "catalog_unknown_key",
@@ -250,6 +250,16 @@ fn appendix_a_catalog_parse_is_closed_and_versioned() {
             "unknown_source_manifest_key",
         ),
         (
+            "unknown reference manifest key",
+            source.replacen(
+                "target_count = 813",
+                "target_count = 813\nunknown_reference_manifest_key = true",
+                1,
+            ),
+            "catalog_unknown_key",
+            "unknown_reference_manifest_key",
+        ),
+        (
             "unknown slice key",
             source.replacen(
                 "definition_status = \"declared\"",
@@ -261,7 +271,7 @@ fn appendix_a_catalog_parse_is_closed_and_versioned() {
         ),
         (
             "wrong schema version",
-            source.replacen("schema_version = 1", "schema_version = 2", 1),
+            source.replacen("schema_version = 2", "schema_version = 3", 1),
             "catalog_pin_mismatch",
             "schema_version",
         ),
@@ -365,6 +375,19 @@ fn appendix_a_catalog_metadata_schemas_reject_unknown_keys() {
     );
     let violations = appendix_a::parse_catalog(&maintenance)
         .expect_err("unknown maintenance-proof key must fail closed");
+    assert!(has_violation(
+        &violations,
+        "catalog_unknown_key",
+        "unknown_metadata_key"
+    ));
+
+    let target_manifest = source.replacen(
+        "[target_manifest]",
+        "[target_manifest]\nunknown_metadata_key = true",
+        1,
+    );
+    let violations = appendix_a::parse_catalog(&target_manifest)
+        .expect_err("unknown target-manifest key must fail closed");
     assert!(has_violation(
         &violations,
         "catalog_unknown_key",
@@ -517,9 +540,11 @@ fn appendix_a_catalog_maintenance_and_semantic_binding_contracts_are_distinct() 
     let mut maintenance_owner = baseline.clone();
     maintenance_owner.maintenance_proof.owner_crate = "fgdb-warden".to_owned();
     let violations = appendix_a::validate_catalog(&maintenance_owner);
-    assert!(violations
-        .iter()
-        .any(|violation| violation.code == "catalog_maintenance_proof_mismatch"));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_maintenance_proof_mismatch")
+    );
 
     let target = baseline
         .targets
@@ -543,9 +568,18 @@ fn appendix_a_catalog_maintenance_and_semantic_binding_contracts_are_distinct() 
 
     let mut semantic = baseline.clone();
     semantic.semantic_bindings.push(valid.clone());
+    let violations = appendix_a::validate_catalog(&semantic);
     assert!(
-        appendix_a::validate_catalog(&semantic).is_empty(),
-        "a declared target may carry a real semantic owner before slice completion"
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_semantic_binding_contract_drift"),
+        "an unpinned real-looking semantic owner self-authorized: {violations:?}"
+    );
+    assert!(
+        !violations
+            .iter()
+            .any(|violation| violation.code == "catalog_semantic_owner_invalid"),
+        "the well-shaped implementation owner should fail only the independent pin: {violations:?}"
     );
 
     let mut fake_owner = baseline.clone();
@@ -553,18 +587,258 @@ fn appendix_a_catalog_maintenance_and_semantic_binding_contracts_are_distinct() 
     fake.owner_crate = "registry-check".to_owned();
     fake_owner.semantic_bindings.push(fake);
     let violations = appendix_a::validate_catalog(&fake_owner);
-    assert!(violations
-        .iter()
-        .any(|violation| violation.code == "catalog_semantic_owner_invalid"));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_semantic_owner_invalid")
+    );
 
     let mut unsorted_consumers = baseline;
     let mut unsorted = valid;
     unsorted.consumer_crates = vec!["z".to_owned(), "a".to_owned()];
     unsorted_consumers.semantic_bindings.push(unsorted);
     let violations = appendix_a::validate_catalog(&unsorted_consumers);
-    assert!(violations
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_metadata_order")
+    );
+}
+
+#[test]
+fn appendix_a_annotations_reject_placeholders_and_unknown_schema_ids() {
+    let mut catalog = real_appendix_catalog();
+    let root_slot_schema_id = catalog
+        .top_level_candidates
         .iter()
-        .any(|violation| violation.code == "catalog_metadata_order"));
+        .find(|candidate| candidate.source_key == "top|RootSlot")
+        .expect("RootSlot source candidate")
+        .row_id
+        .clone();
+    let valid = appendix_a::Annotation {
+        row_id: "a01:annotation:bootstrap-frame-root-slot".to_owned(),
+        target_row_id: "a01:bootstrap-frame:root-slot".to_owned(),
+        exact_type: "RootSlot".to_owned(),
+        cardinality: "one".to_owned(),
+        layout: "fixed".to_owned(),
+        role: "Local".to_owned(),
+        posture: "bootstrap".to_owned(),
+        authority: "root".to_owned(),
+        locality: "local".to_owned(),
+        generic_expansions: Vec::new(),
+        role_expansions: Vec::new(),
+        reference_semantics: "embedded".to_owned(),
+        target_schema_ids: vec![root_slot_schema_id.clone()],
+        construction_order: "root-first".to_owned(),
+        retention_and_cut_rule: "fixed-location".to_owned(),
+        digest_recipe: "slot-checksum".to_owned(),
+        redaction_class: "public-commitment".to_owned(),
+        resource_bounds: "fixed-4096-bytes".to_owned(),
+        compatibility: "v1".to_owned(),
+    };
+    catalog.annotations.push(valid);
+    let violations = appendix_a::validate_catalog(&catalog);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_annotation_contract_drift"),
+        "an unpinned annotation self-authorized: {violations:?}"
+    );
+    for unexpected in [
+        "catalog_annotation_placeholder",
+        "catalog_annotation_target_schema_unresolved",
+        "catalog_annotation_reference_invalid",
+        "catalog_annotation_reference_target_mismatch",
+    ] {
+        assert!(
+            !violations
+                .iter()
+                .any(|violation| violation.code == unexpected),
+            "concrete Local annotation was rejected with {unexpected}: {violations:?}"
+        );
+    }
+
+    for erased_or_union in [
+        "StrongRef",
+        "RegisteredStrongRef[]",
+        "[StrongRef]",
+        "[StrongRef<RootManifest>]",
+        "StrongRef<RootManifest>[]",
+        "StrongRef<ValidTimeContract|RootSlot>",
+        "StrongRef<RootManifest,Anything>",
+        "StrongRef<RootManifest::Anything>",
+    ] {
+        let mut invalid = catalog.clone();
+        invalid.annotations[0].exact_type = erased_or_union.to_owned();
+        let violations = appendix_a::validate_catalog(&invalid);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.code == "catalog_annotation_reference_invalid"),
+            "erased or union StrongRef shape {erased_or_union:?} was accepted: {violations:?}"
+        );
+    }
+
+    let root_manifest_schema_id = catalog
+        .reservations
+        .iter()
+        .find(|reservation| reservation.symbol == "RootManifest")
+        .expect("RootManifest reservation")
+        .row_id
+        .clone();
+    catalog.annotations[0].exact_type = "StrongRef<RootManifest>".to_owned();
+    catalog.annotations[0].reference_semantics = "strong".to_owned();
+    catalog.annotations[0].target_schema_ids.clear();
+    let violations = appendix_a::validate_catalog(&catalog);
+    assert!(
+        violations.iter().any(|violation| {
+            violation.code == "catalog_annotation_reference_target_mismatch"
+        }),
+        "a StrongRef without an exact target schema ID was accepted: {violations:?}"
+    );
+    catalog.annotations[0].target_schema_ids = vec![root_manifest_schema_id];
+    let violations = appendix_a::validate_catalog(&catalog);
+    assert!(
+        !violations.iter().any(|violation| {
+            violation.code == "catalog_annotation_reference_target_mismatch"
+                || violation.code == "catalog_annotation_reference_invalid"
+        }),
+        "a concrete StrongRef did not resolve one-for-one: {violations:?}"
+    );
+
+    let annotation = &mut catalog.annotations[0];
+    annotation.exact_type = "StrongRef<T>".to_owned();
+    annotation.role = "Role".to_owned();
+    annotation.generic_expansions = vec!["RootSlot".to_owned()];
+    annotation.role_expansions = vec!["Local".to_owned()];
+    annotation.reference_semantics = "strong".to_owned();
+    annotation.target_schema_ids = vec!["NonexistentSchema".to_owned()];
+    annotation.retention_and_cut_rule = "TODO".to_owned();
+    let violations = appendix_a::validate_catalog(&catalog);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_annotation_placeholder"),
+        "placeholder annotation assertions were accepted: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| { violation.code == "catalog_annotation_target_schema_unresolved" }),
+        "unknown annotation schema target was accepted: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_annotation_reference_invalid"),
+        "non-concrete StrongRef target was accepted: {violations:?}"
+    );
+
+    for placeholder in ["TODO: define later", "TBD/v2", "unknown until A02"] {
+        let mut embedded = real_appendix_catalog();
+        let mut annotation = catalog.annotations[0].clone();
+        annotation.exact_type = "RootSlot".to_owned();
+        annotation.role = "Local".to_owned();
+        annotation.target_schema_ids = vec![root_slot_schema_id.clone()];
+        annotation.retention_and_cut_rule = placeholder.to_owned();
+        embedded.annotations.push(annotation);
+        let violations = appendix_a::validate_catalog(&embedded);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.code == "catalog_annotation_placeholder"),
+            "embedded placeholder {placeholder:?} was accepted: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn appendix_a_repository_bindings_resolve_beads_crates_checkers_and_events() {
+    let mut catalog = real_appendix_catalog();
+    let owner = "fgdb-durable-capability-validation-evidence-dqym";
+    catalog.semantic_bindings.push(appendix_a::SemanticBinding {
+        row_id: "a01:semantic-binding:bootstrap-frame-root-slot".to_owned(),
+        target_row_id: "a01:bootstrap-frame:root-slot".to_owned(),
+        owner_bead_id: owner.to_owned(),
+        owner_crate: "fgdb-warden".to_owned(),
+        consumer_crates: vec!["fgdb".to_owned(), "fgdb-server".to_owned()],
+    });
+    catalog.evidence.push(appendix_a::EvidenceBinding {
+        row_id: "a01:evidence:bootstrap-frame-root-slot-static-contract".to_owned(),
+        target_row_id: "a01:bootstrap-frame:root-slot".to_owned(),
+        evidence_id: "static-contract".to_owned(),
+        phase: "static".to_owned(),
+        status: "live".to_owned(),
+        owner_bead_id: owner.to_owned(),
+        checker_ids: vec!["appendix_a_catalog_closure".to_owned()],
+        scenario_ids: vec!["g0_identity_e2e".to_owned()],
+        event_ids: vec!["appendix_closure_checked".to_owned()],
+        gate_ids: vec!["G0".to_owned()],
+    });
+    let pinned = appendix_a::validate_catalog(&catalog);
+    for expected in [
+        "catalog_semantic_binding_contract_drift",
+        "catalog_evidence_binding_contract_drift",
+    ] {
+        assert!(
+            pinned.iter().any(|violation| violation.code == expected),
+            "real but unrelated metadata bypassed independent {expected}: {pinned:?}"
+        );
+    }
+    let resolved = appendix_a::verify_repository_bindings(&repo_root(), &catalog);
+    assert!(
+        resolved.is_empty(),
+        "the separate repository-existence layer failed real IDs: {resolved:?}"
+    );
+
+    let mut stub_live = catalog.clone();
+    stub_live.evidence[0].checker_ids = vec!["idr_generated_encoder_decoder_roundtrip".to_owned()];
+    let violations = appendix_a::verify_repository_bindings(&repo_root(), &stub_live);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_live_evidence_checker_not_live"),
+        "live evidence was allowed to cite a stub checker: {violations:?}"
+    );
+    stub_live.evidence[0].status = "planned".to_owned();
+    let violations = appendix_a::verify_repository_bindings(&repo_root(), &stub_live);
+    assert!(
+        violations.is_empty(),
+        "planned evidence must be allowed to cite a registered stub checker: {violations:?}"
+    );
+
+    let mut fabricated = catalog;
+    fabricated.semantic_bindings[0].owner_bead_id = "fgdb-nonexistent-owner-z999".to_owned();
+    fabricated.semantic_bindings[0].owner_crate = "fgdb-nonexistent-owner-crate".to_owned();
+    fabricated.semantic_bindings[0].consumer_crates =
+        vec!["fgdb-nonexistent-consumer-crate".to_owned()];
+    fabricated.evidence[0].owner_bead_id = "fgdb-nonexistent-evidence-z999".to_owned();
+    fabricated.evidence[0].checker_ids = vec!["nonexistent_checker".to_owned()];
+    fabricated.evidence[0].scenario_ids = vec!["nonexistent_scenario".to_owned()];
+    fabricated.evidence[0].event_ids = vec!["nonexistent_event".to_owned()];
+    fabricated.evidence[0].gate_ids = vec!["G5".to_owned()];
+    let mut violations = appendix_a::validate_catalog(&fabricated);
+    violations.extend(appendix_a::verify_repository_bindings(
+        &repo_root(),
+        &fabricated,
+    ));
+    for expected in [
+        "catalog_semantic_owner_bead_unresolved",
+        "catalog_semantic_owner_crate_unresolved",
+        "catalog_semantic_consumer_crate_unresolved",
+        "catalog_evidence_owner_bead_unresolved",
+        "catalog_evidence_checker_unresolved",
+        "catalog_evidence_scenario_unresolved",
+        "catalog_evidence_event_unresolved",
+        "catalog_evidence_gate_invalid",
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.code == expected),
+            "fabricated repository metadata omitted {expected}: {violations:?}"
+        );
+    }
 }
 
 #[test]
@@ -613,9 +887,67 @@ fn appendix_a_catalog_row_ids_and_g0_owners_are_release_pinned() {
 #[test]
 fn appendix_a_catalog_reservation_and_source_census_is_exact() {
     let baseline = real_appendix_catalog();
+    assert_eq!(baseline.reservations.len(), 813);
+    assert_eq!(
+        baseline
+            .reservations
+            .iter()
+            .filter(|row| row.disposition == "existing")
+            .count(),
+        15
+    );
+    assert_eq!(
+        baseline
+            .reservations
+            .iter()
+            .filter(|row| row.disposition == "reserved")
+            .count(),
+        798
+    );
+    assert_eq!(baseline.source_symbol_dispositions.len(), 848);
+    assert_eq!(baseline.top_level_candidates.len(), 1_229);
+    assert_eq!(baseline.targets.len(), 128);
+    assert_eq!(
+        baseline
+            .targets
+            .iter()
+            .filter(|row| row.source_key.starts_with("projection|"))
+            .count(),
+        appendix_a::EXPECTED_PROJECTION_FALLBACK_COUNT
+    );
+    assert_eq!(baseline.target_manifest.target_count, 128);
+    assert_eq!(baseline.target_manifest.projection_fallback_count, 83);
+    assert_eq!(
+        appendix_a::target_source_assignment_sha256(&baseline.targets),
+        appendix_a::EXPECTED_TARGET_SOURCE_ASSIGNMENT_SHA256
+    );
+    let mut reversed_targets = baseline.targets.clone();
+    reversed_targets.reverse();
+    assert_eq!(
+        appendix_a::target_source_assignment_sha256(&reversed_targets),
+        appendix_a::EXPECTED_TARGET_SOURCE_ASSIGNMENT_SHA256,
+        "target/source transcript must sort by target_row_id, not file order"
+    );
+    assert!(baseline.semantic_bindings.is_empty());
+    assert!(baseline.evidence.is_empty());
     assert_eq!(
         appendix_a::reservation_assignment_sha256(&baseline.reservations),
         appendix_a::EXPECTED_RESERVATION_ASSIGNMENT_SHA256
+    );
+
+    let mut reassigned_target = baseline.clone();
+    reassigned_target
+        .targets
+        .iter_mut()
+        .find(|row| row.target_row_id == "a01:field:root-slot-cluster-incarnation")
+        .expect("source-backed RootSlot.cluster_incarnation target")
+        .source_key = "projection|durable_fields|RootSlot.cluster_incarnation".to_owned();
+    let violations = appendix_a::validate_catalog(&reassigned_target);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_target_source_assignment_drift"),
+        "exact target/source assignment was silently downgraded: {violations:?}"
     );
 
     let mut empty = baseline.clone();
@@ -838,14 +1170,12 @@ fn appendix_a_complete_slice_requires_full_source_target_and_evidence_closure() 
 
     let violations = appendix_a::validate_catalog(&catalog);
     assert!(
-        violations
-            .iter()
-            .any(|violation| matches!(
-                violation.code.as_str(),
-                "complete_slice_ambiguity"
-                    | "complete_slice_target_declared"
-                    | "slice_census_pin_mismatch"
-            )),
+        violations.iter().any(|violation| matches!(
+            violation.code.as_str(),
+            "complete_slice_ambiguity"
+                | "complete_slice_target_declared"
+                | "slice_census_pin_mismatch"
+        )),
         "vacuously complete A02 did not expose unresolved source coverage: {violations:?}"
     );
     assert!(
@@ -872,6 +1202,21 @@ fn appendix_a_complete_slice_requires_full_source_target_and_evidence_closure() 
             .iter()
             .any(|violation| { violation.code == "slice_projection_class_assignment_drift" }),
         "slice projection-class assignment/order drift was not release-pinned: {violations:?}"
+    );
+
+    let mut projection_fallback = real_appendix_catalog();
+    let fallback = projection_fallback
+        .targets
+        .iter_mut()
+        .find(|row| row.slice_id != "g0" && row.source_key.starts_with("projection|"))
+        .expect("declared Appendix projection-only fallback exists");
+    fallback.definition_status = "complete".to_owned();
+    let violations = appendix_a::validate_catalog(&projection_fallback);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "catalog_target_projection_incomplete"),
+        "projection-only source incorrectly backed a complete target: {violations:?}"
     );
 }
 
@@ -906,38 +1251,113 @@ fn appendix_a_catalog_raw_source_mutations_fail_closed() {
 }
 
 #[test]
-fn appendix_a_strong_ref_and_definition_census_is_exact() {
+fn appendix_a_source_derived_catalog_rows_and_slice_census_fail_closed() {
     let source = real_plan_source();
-    let strong_refs = appendix_a::strong_ref_census(&source);
-    assert_eq!(
-        strong_refs.families.len(),
-        appendix_a::EXPECTED_TYPE_RESERVATION_COUNT
-    );
-    assert_eq!(
-        strong_refs.family_sha256,
-        appendix_a::EXPECTED_SOURCE_FAMILY_SHA256
-    );
-    assert_eq!(
-        strong_refs.location_pair_count,
-        appendix_a::EXPECTED_SOURCE_LOCATION_PAIR_COUNT
-    );
-    assert_eq!(
-        strong_refs.location_sha256,
-        appendix_a::EXPECTED_SOURCE_LOCATION_SHA256
+
+    let mut missing_candidate = real_appendix_catalog();
+    let removed = missing_candidate.top_level_candidates.remove(0);
+    let violations = appendix_a::verify_source(&missing_candidate, &source);
+    assert!(
+        violations.iter().any(|violation| {
+            violation.code == "source_top_level_candidate_missing"
+                && violation.row_id == removed.source_key
+        }),
+        "missing source candidate did not identify its exact key: {violations:?}"
     );
 
-    let definitions = appendix_a::definition_census(&source, &strong_refs);
-    assert_eq!(
-        definitions.first_locations.len(),
-        appendix_a::EXPECTED_DEFINED_SOURCE_FAMILY_COUNT
+    let mut mismatched_candidate = real_appendix_catalog();
+    mismatched_candidate.top_level_candidates[0].source_kind =
+        if mismatched_candidate.top_level_candidates[0].source_kind == "name-only" {
+            "confirmed"
+        } else {
+            "name-only"
+        }
+        .to_owned();
+    let violations = appendix_a::verify_source(&mismatched_candidate, &source);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "source_top_level_candidate_mismatch"),
+        "source-candidate metadata drift escaped reconciliation: {violations:?}"
     );
-    assert_eq!(
-        definitions.family_sha256,
-        appendix_a::EXPECTED_DEFINED_SOURCE_FAMILY_SHA256
+
+    let mut wrong_field_pin = real_appendix_catalog();
+    let replacement = if wrong_field_pin.slices[0]
+        .field_candidate_ids_sha256
+        .starts_with('0')
+    {
+        "1"
+    } else {
+        "0"
+    };
+    wrong_field_pin.slices[0]
+        .field_candidate_ids_sha256
+        .replace_range(0..1, replacement);
+    let violations = appendix_a::verify_source(&wrong_field_pin, &source);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "source_structural_census_mismatch"),
+        "source structural-census pin drift escaped reconciliation: {violations:?}"
     );
-    assert_eq!(
-        definitions.location_sha256,
-        appendix_a::EXPECTED_DEFINITION_LOCATION_SHA256
+
+    let mut moved_owner = real_appendix_catalog();
+    let reservation = moved_owner
+        .reservations
+        .iter_mut()
+        .find(|row| row.symbol == "ValidTimeContract")
+        .expect("plan-only reference reservation");
+    reservation.slice_id = "a21".to_owned();
+    reservation.row_id = "a21:reservation:valid-time-contract".to_owned();
+    let disposition = moved_owner
+        .source_symbol_dispositions
+        .iter_mut()
+        .find(|row| row.symbol == "ValidTimeContract")
+        .expect("plan-only reference disposition");
+    disposition.slice_id = "a21".to_owned();
+    disposition.row_id = "a21:source-symbol-disposition:valid-time-contract".to_owned();
+    let violations = appendix_a::verify_source(&moved_owner, &source);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| { violation.code == "reference_source_reservation_owner_mismatch" }),
+        "coherent reservation/disposition owner drift escaped source derivation: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "reference_source_disposition_mismatch"),
+        "source disposition owner drift escaped source derivation: {violations:?}"
+    );
+}
+
+#[test]
+fn appendix_a_full_plan_reference_occurrence_drift_fails_closed() {
+    let catalog = real_appendix_catalog();
+    let source = real_plan_source();
+    let appendix_start = line_start_offset(&source, appendix_a::APPENDIX_START_LINE);
+    let needle = b"StrongRef<ValidTimeContract>";
+    let replacement = b"StrongRef<ValidTimeContracx>";
+    let offset = source[..appendix_start]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .expect("reference occurrence exists before Appendix A");
+    let mut mutated = source;
+    mutated[offset..offset + needle.len()].copy_from_slice(replacement);
+
+    let violations = appendix_a::verify_source(&catalog, &mutated);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.code == "reference_source_manifest_mismatch"),
+        "full-plan reference occurrence drift escaped the pinned manifest: {violations:?}"
+    );
+    assert!(
+        violations.iter().any(|violation| {
+            violation.code == "reference_source_reservation_missing"
+                && violation.row_id == "ValidTimeContracx"
+        }),
+        "new reference family did not require a reservation: {violations:?}"
     );
 }
 
@@ -955,79 +1375,6 @@ fn appendix_a_audit_outcome_uses_family_ref_plus_required_arm_predicate() {
     assert!(
         source.contains("mandatory exact `VisibilityReleased` required-arm predicate"),
         "AuditOutcomeRecord must pin the required variant separately"
-    );
-}
-
-#[test]
-fn appendix_a_scaffold_metadata_generation_is_frozen_and_reproducible() {
-    let catalog_text = real_appendix_catalog_text();
-    let catalog = appendix_a::parse_catalog(&catalog_text).expect("complete catalog parses");
-    let generated = appendix_a::generated_scaffold_metadata(&catalog, &real_plan_source())
-        .expect("scaffold metadata regenerates");
-    assert_eq!(
-        generated.len(),
-        appendix_a::EXPECTED_SCAFFOLD_METADATA_BYTE_COUNT
-    );
-    assert_eq!(
-        registry_check::hash::sha256_hex(generated.as_bytes()),
-        appendix_a::EXPECTED_SCAFFOLD_METADATA_SHA256
-    );
-    let marker = concat!(
-        "\n# =============================================================================\n",
-        "# Generated G0 Appendix-A type census and exact ownership/evidence closure."
-    );
-    let start = catalog_text
-        .find(marker)
-        .expect("generated scaffold marker is checked in");
-    assert_eq!(
-        &catalog_text[start..],
-        generated,
-        "checked-in metadata suffix must equal deterministic generation"
-    );
-}
-
-#[test]
-fn appendix_a_public_scaffold_generator_rejects_malformed_catalogs_without_panicking() {
-    let source = real_plan_source();
-
-    let mut unknown_projection = real_appendix_catalog();
-    let row = unknown_projection
-        .projection_rows
-        .iter_mut()
-        .find(|row| row.slice_id == "g0")
-        .expect("G0 projection exists");
-    row.projection = "unknown_projection".to_owned();
-    let violations = appendix_a::generated_scaffold_metadata(&unknown_projection, &source)
-        .expect_err("unknown projection must be a typed error");
-    assert!(
-        violations
-            .iter()
-            .any(|violation| violation.code == "catalog_projection_registry_unknown")
-    );
-
-    let mut malformed_row_id = real_appendix_catalog();
-    let row = malformed_row_id
-        .projection_rows
-        .iter_mut()
-        .find(|row| row.slice_id == "g0")
-        .expect("G0 projection exists");
-    row.row_id = "malformed".to_owned();
-    let violations = appendix_a::generated_scaffold_metadata(&malformed_row_id, &source)
-        .expect_err("malformed public row ID must be a typed error");
-    assert!(
-        violations
-            .iter()
-            .any(|violation| violation.code == "catalog_row_id_invalid")
-    );
-
-    let mut malformed_reservation = real_appendix_catalog();
-    malformed_reservation.reservations[0].code_reservation = "not-a-code".to_owned();
-    let violations = appendix_a::generated_scaffold_metadata(&malformed_reservation, &source)
-        .expect_err("malformed released reservation must be a typed error");
-    assert!(
-        violations
-            .iter()
-            .any(|violation| violation.code == "catalog_reservation_code_invalid")
     );
 }
 

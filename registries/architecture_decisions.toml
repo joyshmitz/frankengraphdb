@@ -8,12 +8,13 @@
 # research-only citations and can never authorize a runtime dependency.
 # =============================================================================
 
-schema_version = 1
+schema_version = 2
 
 [registry]
 name = "architecture_decisions"
 ownership_scope = "all_beads_provenance"
 decision_id_prefix = "FG-ADR-"
+external_review_history_hash = "fnv1a64:5e15e3d99eec84ac"
 required_source_blocks = ["plan-thesis-foundations-sota-v1", "plan-reviewed-bibliography-v1"]
 allowed_categories = [
   "thesis_bet",
@@ -349,8 +350,8 @@ document_path = "docs/ARCHITECTURE_DECISION_RECORD.md"
 start_marker = '''<!-- CHECKED-SOURCE-BEGIN id="plan-reviewed-bibliography-v1" -->'''
 end_marker = '''<!-- CHECKED-SOURCE-END id="plan-reviewed-bibliography-v1" -->'''
 plan_path = "COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB.md"
-plan_start_line = 3120
-plan_end_line = 3123
+plan_start_line = 3196
+plan_end_line = 3199
 line_count = 4
 byte_count = 4741
 fnv1a64 = "0xba0fcc184882baec"
@@ -2197,7 +2198,7 @@ affected_format_rows = ["reserved:delta-block"]
 verification_entrypoints = ["cargo-test:architecture_decisions", "cargo-test:representation-equivalence"]
 checker_ids = ["architecture_source_coverage", "architecture_owner_closure"]
 evidence_ids = []
-status = "frozen"
+status = "review_due"
 
 [[decision]]
 id = "FG-ADR-SOTA-STORAGE-AEONG"
@@ -2374,7 +2375,7 @@ affected_format_rows = ["reserved:language-contract"]
 verification_entrypoints = ["cargo-test:architecture_decisions", "cargo-test:gql-feature-matrix"]
 checker_ids = ["architecture_source_coverage", "architecture_owner_closure"]
 evidence_ids = []
-status = "frozen"
+status = "review_due"
 
 [[decision]]
 id = "FG-ADR-SOTA-QUERY-CONVERGED-OPTIMIZER"
@@ -6911,3 +6912,1493 @@ verification_entrypoints = ["cargo-test:architecture_decisions", "e2e:g0_archite
 checker_ids = ["architecture_source_coverage", "architecture_research_dependency_firewall"]
 evidence_ids = ["FG-EVID-04"]
 status = "review_due"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-ADOPT-PVLDB16"
+uri = "https://www.vldb.org/pvldb/vol16/p2805-wang.pdf"
+published_at = "2023-08-25"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:5b7869ec46c9af23b3a1c58a9cb3f29358389a45c4c70a865ced707094b30a90"
+source_fingerprint = "fnv1a64:cafe813c74458175"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-AEONG-ARXIV-230412212-V1"
+uri = "https://arxiv.org/pdf/2304.12212v1"
+published_at = "2023-04-24"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:049cdbc0c61536a0dcf0188251ede9938db2c697556f72e19be426ef01edc99e"
+source_fingerprint = "fnv1a64:4f944f287f46e144"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-AGENT-MEMORY-SECURITY-ARXIV-260416548-V2"
+uri = "https://arxiv.org/pdf/2604.16548v2"
+published_at = "2026-06-11"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:314f86e4cae6e3fa16e813ddb721991a256345d9a87b2a11290a0655f462df9f"
+source_fingerprint = "fnv1a64:13110ad0e35452b0"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-ASPEN-ARXIV-190408380-V1"
+uri = "https://arxiv.org/pdf/1904.08380v1"
+published_at = "2019-04-17"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:bc0454b9ca55954b587c8dfbf3d9374edea2c11e34f9c1e95ccd49b863774d2b"
+source_fingerprint = "fnv1a64:b882068bb8a3521e"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-ASUPERSYNC-E464A484"
+uri = "https://codeload.github.com/Dicklesworthstone/asupersync/tar.gz/e464a484cb65c1a55be0d9c925e6e9c20318edcb"
+published_at = "2026-07-21"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:12469aa3aa56c9dbc4302d78882ff47999fc174709d37d7b9e5ca440adfca69a"
+source_fingerprint = "fnv1a64:36a97724bc98f9cc"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-DBSP-PVLDB16"
+uri = "https://www.vldb.org/pvldb/vol16/p1601-budiu.pdf"
+published_at = "2023-05-08"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:48ea73d2d5d098b0ae97f59f818789f5408a503e17062a6041c5f2e4cf9c78be"
+source_fingerprint = "fnv1a64:bdce57c4c990b83d"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-DGS-FIELD-ARXIV-250210959-V1"
+uri = "https://arxiv.org/pdf/2502.10959v1"
+published_at = "2025-02-16"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:7eb807b94f4d683732cd46d8cebbd71fda1818f4f3576185f2393a5c7a4feeb4"
+source_fingerprint = "fnv1a64:3de9400df8c042c9"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-EMPTYHEADED-SIGMOD-2016"
+uri = "https://pmc.ncbi.nlm.nih.gov/articles/PMC5221635/pdf/nihms826693.pdf"
+published_at = "2016-06-14"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:cc9d00c9dc04cb75033d31167eb15597395611a465eaf2fb2a97cc39a5c147de"
+source_fingerprint = "fnv1a64:18f25d1e66b21aa5"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-ERARAG-ARXIV-250620963-V1"
+uri = "https://arxiv.org/pdf/2506.20963v1"
+published_at = "2025-06-26"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:379c19a552341aaf5dc71528c547eb17bf3c340f6d5d0186b978499c196c858d"
+source_fingerprint = "fnv1a64:dbc0b4d730ec347d"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-FDB-ARXIV-12032672-V1"
+uri = "https://arxiv.org/pdf/1203.2672v1"
+published_at = "2012-03-12"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:6ab0894b1679fdfb713a99333424ec5a8c9911804784699d5932abe437f8b241"
+source_fingerprint = "fnv1a64:adc9943e36402022"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-FNX-9D710B1C"
+uri = "https://codeload.github.com/Dicklesworthstone/franken_networkx/tar.gz/9d710b1c33e99412c94de7fa4de2f7ce4954110f"
+published_at = "2026-07-12"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:e65354c28c683f2dce21d08c1fbe4064403a030447ddb62afd444bc0fd16b022"
+source_fingerprint = "fnv1a64:e3930dd6835ff17d"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-FREEJOIN-ARXIV-230110841-V1"
+uri = "https://arxiv.org/pdf/2301.10841v1"
+published_at = "2023-01-25"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:1e896d883a1b96f1bb7e0c7b9db2fef1af8e321244eabc3eb9e407b4b16ec20c"
+source_fingerprint = "fnv1a64:ead4625999906951"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-FSQL-A9D86256"
+uri = "https://codeload.github.com/Dicklesworthstone/frankensqlite/tar.gz/a9d8625679189193ce88bdeec9653b98064f4c17"
+published_at = "2026-07-22"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:5348966b4fd35272d1e48ea07e595c9cbfaffae28bf09df29f531de8edb8254b"
+source_fingerprint = "fnv1a64:eee05f58fedf612b"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-GRAPHRAG-ARXIV-250113958-V1"
+uri = "https://arxiv.org/pdf/2501.13958v1"
+published_at = "2025-01-21"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:38ef6712c99eb8b560d8b322c1d04c3423c65d3bc8d37e414884969ca51ea82b"
+source_fingerprint = "fnv1a64:06bf73b50d50b2a3"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-GRAPHSURGE-ARXIV-200405297-V1"
+uri = "https://arxiv.org/pdf/2004.05297v1"
+published_at = "2020-04-11"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:260a87bc1411eb0947a4442107c4976d2b455f01d45ed423451ee0ad74f95f81"
+source_fingerprint = "fnv1a64:8cac26fc0b6f1edf"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-GTX-ARXIV-240501418-V1"
+uri = "https://arxiv.org/pdf/2405.01418v1"
+published_at = "2024-05-02"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:7e30dca6ab831708e74b94cd6dfc106355bfcdef26b6c703d48cdf37e6453018"
+source_fingerprint = "fnv1a64:f860ea2fa2a26f27"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-HNSW-ARXIV-160309320-V1"
+uri = "https://arxiv.org/pdf/1603.09320v1"
+published_at = "2016-03-30"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:dff47e7214c55292f799fc4311c693a6c23562b3002155937172923bf1812695"
+source_fingerprint = "fnv1a64:14eb44218a91d55e"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-HONEYCOMB-ARXIV-250206715-V1"
+uri = "https://arxiv.org/pdf/2502.06715v1"
+published_at = "2025-02-10"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:2a2038ecdd6e09ef19d51afd29063d1ccdb0d76cdd76f9fc4a5f44359fba9d51"
+source_fingerprint = "fnv1a64:69eeb5dc66a7047d"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-KUZU-CIDR-2023"
+uri = "https://www.vldb.org/cidrdb/papers/2023/p48-jin.pdf"
+published_at = "2023-01-08"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:01dc584f203c4a183431beab17d956ee5fcefabd2b834f0b90e505a4d0c1a1b6"
+source_fingerprint = "fnv1a64:4aa4ff304bdb999b"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-KUZU-COLUMNAR-PVLDB14"
+uri = "https://www.vldb.org/pvldb/vol14/p2491-gupta.pdf"
+published_at = "2021-10-27"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:79df58fb1c3b2d7c0450d2f21166cd485bd68948679246276aec11a5698043b0"
+source_fingerprint = "fnv1a64:66771e659445f88a"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-LEANSTORE-ICDE-2018"
+uri = "https://db.in.tum.de/~leis/papers/leanstore.pdf"
+published_at = "2018-04-17"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:c070f7f12514d6e8da54b10639f0fe70829f7a19d97b93c064eb66fea9cb2f33"
+source_fingerprint = "fnv1a64:c578c0f0f1f32da0"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-LIVEGRAPH-ARXIV-191005773-V1"
+uri = "https://arxiv.org/pdf/1910.05773v1"
+published_at = "2019-10-13"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:b4cd1b573c04f1430b599c11034253bc92a0fc42cf678bb435e545adcf9509c5"
+source_fingerprint = "fnv1a64:0dd820e2b3e89270"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-MORSEL-SIGMOD-2014"
+uri = "https://db.in.tum.de/~leis/papers/morsels.pdf"
+published_at = "2014-06-18"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:4da8cc834cfa37165feaf8e1b68971790fd5389ecd8bb80f140062e96c8bbf52"
+source_fingerprint = "fnv1a64:e0adf69248e2bab9"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-NPRR-ARXIV-12031952-V1"
+uri = "https://arxiv.org/pdf/1203.1952v1"
+published_at = "2012-03-08"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:32170128fe35ae724853e84c3ba418bf4df48b1e7d667cfb5c6cd94bf0bc25c3"
+source_fingerprint = "fnv1a64:925612de005e1940"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-OPENCYPHER-677CBAFA"
+uri = "https://codeload.github.com/opencypher/openCypher/tar.gz/677cbafabb8c3c5eed458fd3b1ec0daec8d67d23"
+published_at = "2026-03-20"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:59d38a92502de8281b28697fc41dc58ed6403081ec7a159983ed425943dd1e16"
+source_fingerprint = "fnv1a64:2340fa70670dd47d"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-PQ-HAL-INRIA-00514462-V2"
+uri = "https://inria.hal.science/inria-00514462v2/file/jegou_searching_with_quantization.pdf"
+published_at = "2013-05-22"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:a1c3bd42693a73c4a400796218af6b91d07fe3de5433b51dc2f9b58d3fa1cc60"
+source_fingerprint = "fnv1a64:25bde9eb9a1ba04d"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-RADIXGRAPH-ARXIV-260101444-V1"
+uri = "https://arxiv.org/pdf/2601.01444v1"
+published_at = "2026-01-04"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:366e90af44ea2233b2c59dfebbf83fe85ffd066c13de236fce5dfcfbddaebcea"
+source_fingerprint = "fnv1a64:3ea9c74429febe05"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-RAPIDSTORE-ARXIV-250700839-V1"
+uri = "https://arxiv.org/pdf/2507.00839v1"
+published_at = "2025-07-01"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:b8fec00762ab68d23e3f14d1c84c12b38f8defc8e01422dfbc0ae7c589a7963b"
+source_fingerprint = "fnv1a64:3df75ced0737f49b"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-RELGO-ARXIV-240813480-V1"
+uri = "https://arxiv.org/pdf/2408.13480v1"
+published_at = "2024-08-24"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:1a419d44ede0c72f94fae1d861a25426f02a9f050a775e69a21e8018badf4aff"
+source_fingerprint = "fnv1a64:7900dd7b9b75c65e"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-SORTLEDTON-PVLDB15"
+uri = "https://www.vldb.org/pvldb/vol15/p1173-fuchs.pdf"
+published_at = "2022-06-22"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:b4cf3b014be787cbee34ce34de99c20fcf902ca2e95869df51d2e375766f755d"
+source_fingerprint = "fnv1a64:e076ff38d27bd80c"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-TALS-ARXIV-250300402-V1"
+uri = "https://arxiv.org/pdf/2503.00402v1"
+published_at = "2025-03-01"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:bba0d3e29650a1c17dfa56b1848764e672e7cccf31fe0800ec3e5ef130dd5900"
+source_fingerprint = "fnv1a64:5eff40691544fd47"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-TESEO-PVLDB14"
+uri = "https://www.vldb.org/pvldb/vol14/p1053-leo.pdf"
+published_at = "2021-04-12"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:2e73c812413df8a83b368d236f31a41eac667fb8a180a2cbc2595fcb20a661da"
+source_fingerprint = "fnv1a64:8043fb904181a88c"
+
+[[external_review_source]]
+id = "FG-ADR-EXTSRC-UMBRA-CIDR-2020"
+uri = "https://www.vldb.org/cidrdb/papers/2020/p29-neumann-cidr20.pdf"
+published_at = "2020-01-13"
+retrieved_at = "2026-07-22"
+content_digest = "sha256:de89479593e78f484930b40ab6287e07509e0977355c9e549c0e1f1067904e31"
+source_fingerprint = "fnv1a64:4fcd9bf26dd26eb6"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-ATP-0001"
+decision_id = "FG-ADR-ASU-ATP"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:d264bc08a3c4c65c"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:41de119136f7894d"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-CHANNELS-COMBINATORS-0001"
+decision_id = "FG-ADR-ASU-CHANNELS-COMBINATORS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:6cf4d2354cb47c8b"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:66440eea59500478"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-CX-CAPABILITIES-0001"
+decision_id = "FG-ADR-ASU-CX-CAPABILITIES"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:ad017dfe23a6a2df"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:e24c4385a1187441"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-DISTRIBUTED-PROTOCOL-MACHINES-0001"
+decision_id = "FG-ADR-ASU-DISTRIBUTED-PROTOCOL-MACHINES"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:5163b460c0e77c22"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:72defc6ca02c056e"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-FORMAL-LAYER-0001"
+decision_id = "FG-ADR-ASU-FORMAL-LAYER"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:774af1dbff6a9702"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:f5b143797597b301"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-IO-MEMORY-OBSERVABILITY-0001"
+decision_id = "FG-ADR-ASU-IO-MEMORY-OBSERVABILITY"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:74861a24bd2cf40e"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:279859fef5752c47"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-LAB-RUNTIME-0001"
+decision_id = "FG-ADR-ASU-LAB-RUNTIME"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:553b876e303bd6d2"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:a423288e68f7ca51"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-NETWORK-STACK-0001"
+decision_id = "FG-ADR-ASU-NETWORK-STACK"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:5925c64844cb358b"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:f1300f93e16c7bbf"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-PLAN-SCAFFOLDING-0001"
+decision_id = "FG-ADR-ASU-PLAN-SCAFFOLDING"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:b610d729c11ca9d1"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:9a501d63f64be054"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-RAPTORQ-0001"
+decision_id = "FG-ADR-ASU-RAPTORQ"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:66c90da999a02d9c"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:ba1cd4462519efa2"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-REMOTE-PROTOCOL-PRIMITIVES-0001"
+decision_id = "FG-ADR-ASU-REMOTE-PROTOCOL-PRIMITIVES"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:ddf549110d036136"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:cb01b5ec21d461ad"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-SECURITY-PRIMITIVES-0001"
+decision_id = "FG-ADR-ASU-SECURITY-PRIMITIVES"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:875a042cd7845283"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:171898759487340f"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-SPORK-OTP-0001"
+decision_id = "FG-ADR-ASU-SPORK-OTP"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:e62cc08d904f2273"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:2335a4346d28dbdc"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-STATISTICAL-GOVERNANCE-0001"
+decision_id = "FG-ADR-ASU-STATISTICAL-GOVERNANCE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:6cd1519c03e1ca62"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:775bd761413b6815"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-STRUCTURED-CONCURRENCY-0001"
+decision_id = "FG-ADR-ASU-STRUCTURED-CONCURRENCY"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:e2e50b3ed822ac2e"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:497cd19346ce6c1e"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-ASU-VERIFICATION-FORENSICS-0001"
+decision_id = "FG-ADR-ASU-VERIFICATION-FORENSICS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:aa784fca12872cf4"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484"]
+outcome = "current"
+record_fingerprint = "fnv1a64:5882da970b84a6f0"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FNX-ALGORITHM-CATALOG-0001"
+decision_id = "FG-ADR-FNX-ALGORITHM-CATALOG"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:92aa2559cf7d05a4"
+source_ids = ["FG-ADR-EXTSRC-FNX-9D710B1C"]
+outcome = "current"
+record_fingerprint = "fnv1a64:c991bed87b106699"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FNX-CGSE-0001"
+decision_id = "FG-ADR-FNX-CGSE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:7effb72235bfeb46"
+source_ids = ["FG-ADR-EXTSRC-FNX-9D710B1C"]
+outcome = "current"
+record_fingerprint = "fnv1a64:48df3953ed9ad5c4"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FNX-COMPATIBILITY-VIEWS-0001"
+decision_id = "FG-ADR-FNX-COMPATIBILITY-VIEWS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:f353e7d0eaa450d9"
+source_ids = ["FG-ADR-EXTSRC-FNX-9D710B1C"]
+outcome = "current"
+record_fingerprint = "fnv1a64:e42c5d467aad28f2"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FNX-DURABILITY-0001"
+decision_id = "FG-ADR-FNX-DURABILITY"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:fe167eb20acaeb20"
+source_ids = ["FG-ADR-EXTSRC-FNX-9D710B1C"]
+outcome = "current"
+record_fingerprint = "fnv1a64:4e6454c7a3415872"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FNX-GENERATORS-0001"
+decision_id = "FG-ADR-FNX-GENERATORS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:7a67fb02e4c863d7"
+source_ids = ["FG-ADR-EXTSRC-FNX-9D710B1C"]
+outcome = "current"
+record_fingerprint = "fnv1a64:82df7a7a36238df9"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FNX-GRAPHVIEW-PREREQUISITE-0001"
+decision_id = "FG-ADR-FNX-GRAPHVIEW-PREREQUISITE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:9b2c1caaf20daff8"
+source_ids = ["FG-ADR-EXTSRC-FNX-9D710B1C"]
+outcome = "drift_detected"
+record_fingerprint = "fnv1a64:5178e7c19af98f78"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FNX-READWRITE-0001"
+decision_id = "FG-ADR-FNX-READWRITE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:ae6cb6e25e027e52"
+source_ids = ["FG-ADR-EXTSRC-FNX-9D710B1C"]
+outcome = "current"
+record_fingerprint = "fnv1a64:0f8fc169eed5c025"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-ECS-0001"
+decision_id = "FG-ADR-FSQL-ECS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:ad7880a024a210a9"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:1faa8f6dbe855941"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-ENCRYPT-THEN-CODE-0001"
+decision_id = "FG-ADR-FSQL-ENCRYPT-THEN-CODE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:04eea30cdc3140ef"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:4d483a020635ec86"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-MECHANICAL-SYMPATHY-0001"
+decision_id = "FG-ADR-FSQL-MECHANICAL-SYMPATHY"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:5ddc508c1388223e"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:fd4c146669c84a28"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-MERGE-LADDER-0001"
+decision_id = "FG-ADR-FSQL-MERGE-LADDER"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:fd187cbccab76f04"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:d4bda38fbbd6d155"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-MVCC-0001"
+decision_id = "FG-ADR-FSQL-MVCC"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:c496ff771e777640"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:f61042df1af7e115"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-SSI-0001"
+decision_id = "FG-ADR-FSQL-SSI"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:450e326f10555a30"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:d6f8500f27b6bb3f"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-TIME-TRAVEL-0001"
+decision_id = "FG-ADR-FSQL-TIME-TRAVEL"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:9ac17e372b4b84f9"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:8b34efe14966edcb"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-VERIFICATION-POSTURE-0001"
+decision_id = "FG-ADR-FSQL-VERIFICATION-POSTURE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:24bf0bdc6a5416b0"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:34c1d4e5ace5954c"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-FSQL-WRITE-COORDINATOR-0001"
+decision_id = "FG-ADR-FSQL-WRITE-COORDINATOR"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:ea08cf569e89b5b1"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:b3bf6e8cf4d22e5e"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-ADJACENCY-CODECS-0001"
+decision_id = "FG-ADR-GAP-ADJACENCY-CODECS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:fb440fc8390e367d"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:af73e2d393d58340"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-CALIBRATION-GRAPH-SCORES-0001"
+decision_id = "FG-ADR-GAP-CALIBRATION-GRAPH-SCORES"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:10c187d1da3c66dc"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:4a14cc42620a9b6d"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-COLUMNAR-GRAPH-STORAGE-0001"
+decision_id = "FG-ADR-GAP-COLUMNAR-GRAPH-STORAGE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:99f480acffbb7881"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:c5ed8595739e3aac"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-COST-BASED-OPTIMIZER-0001"
+decision_id = "FG-ADR-GAP-COST-BASED-OPTIMIZER"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:3de2c74f4fa12ccf"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:8c887c4041805c6a"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-GRAPH-STATISTICS-SKETCHES-0001"
+decision_id = "FG-ADR-GAP-GRAPH-STATISTICS-SKETCHES"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:5a039c082a1a3bfc"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:68ae225d933548a8"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-QUERY-LANGUAGE-FRONTEND-0001"
+decision_id = "FG-ADR-GAP-QUERY-LANGUAGE-FRONTEND"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:9c3525b7fc28dc3b"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:3985457855857ead"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-RAFT-STATE-MACHINE-0001"
+decision_id = "FG-ADR-GAP-RAFT-STATE-MACHINE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:ea20d1dd0805adbc"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:e2e58ec325f6a2df"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-SECONDARY-FTS-VECTOR-INDEXES-0001"
+decision_id = "FG-ADR-GAP-SECONDARY-FTS-VECTOR-INDEXES"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:c1149dadcd578d27"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:5e2f83886d1c4ee4"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-VECTORIZED-FACTORIZED-EXECUTOR-0001"
+decision_id = "FG-ADR-GAP-VECTORIZED-FACTORIZED-EXECUTOR"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:6e02d8179d91a7b0"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:7f33b385bcc7aa7a"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-VERIFIABILITY-ACCUMULATOR-0001"
+decision_id = "FG-ADR-GAP-VERIFIABILITY-ACCUMULATOR"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:7daa112793a5ed5b"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:154c66af456ec3dc"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-WCOJ-0001"
+decision_id = "FG-ADR-GAP-WCOJ"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:1dbdba6c9da83e19"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:1f715e89f7d17725"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-WIRE-GRAPH-PAYLOADS-0001"
+decision_id = "FG-ADR-GAP-WIRE-GRAPH-PAYLOADS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:c894c83826c1e7fe"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:fb6cfb63ec72c6fd"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-GAP-ZSET-ENGINE-0001"
+decision_id = "FG-ADR-GAP-ZSET-ENGINE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:f7cdd606f5198bc4"
+source_ids = ["FG-ADR-EXTSRC-ASUPERSYNC-E464A484", "FG-ADR-EXTSRC-FNX-9D710B1C", "FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:c9e1a83a0a93f07a"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-INCREMENTAL-ANALYTICS-0001"
+decision_id = "FG-ADR-SOTA-INCREMENTAL-ANALYTICS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:5eb39a42a7cf3536"
+source_ids = ["FG-ADR-EXTSRC-GRAPHSURGE-ARXIV-200405297-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:342cf45770dc0b23"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-INCREMENTAL-ANN-0001"
+decision_id = "FG-ADR-SOTA-INCREMENTAL-ANN"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:c0411ca6d7786bbb"
+source_ids = ["FG-ADR-EXTSRC-HNSW-ARXIV-160309320-V1", "FG-ADR-EXTSRC-PQ-HAL-INRIA-00514462-V2"]
+outcome = "current"
+record_fingerprint = "fnv1a64:59ec7378d46f26d5"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-INCREMENTAL-DBSP-0001"
+decision_id = "FG-ADR-SOTA-INCREMENTAL-DBSP"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:a504b39b6d070ab4"
+source_ids = ["FG-ADR-EXTSRC-DBSP-PVLDB16"]
+outcome = "current"
+record_fingerprint = "fnv1a64:15fdd50056b73941"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-INCREMENTAL-FTS-0001"
+decision_id = "FG-ADR-SOTA-INCREMENTAL-FTS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:5059e99ce52e4360"
+source_ids = ["FG-ADR-EXTSRC-FSQL-A9D86256"]
+outcome = "current"
+record_fingerprint = "fnv1a64:bf38dca688e398ed"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-INCREMENTAL-MARKET-GAPS-0001"
+decision_id = "FG-ADR-SOTA-INCREMENTAL-MARKET-GAPS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:bd4d202d22820de5"
+source_ids = ["FG-ADR-EXTSRC-AGENT-MEMORY-SECURITY-ARXIV-260416548-V2", "FG-ADR-EXTSRC-ERARAG-ARXIV-250620963-V1", "FG-ADR-EXTSRC-GRAPHRAG-ARXIV-250113958-V1", "FG-ADR-EXTSRC-TALS-ARXIV-250300402-V1"]
+outcome = "drift_detected"
+record_fingerprint = "fnv1a64:b16b2a1c4bad571a"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-QUERY-CONVERGED-OPTIMIZER-0001"
+decision_id = "FG-ADR-SOTA-QUERY-CONVERGED-OPTIMIZER"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:2d6ed3cf7783b944"
+source_ids = ["FG-ADR-EXTSRC-RELGO-ARXIV-240813480-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:67b160b9567ba6e8"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-QUERY-FACTORIZATION-0001"
+decision_id = "FG-ADR-SOTA-QUERY-FACTORIZATION"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:0da489b7fa467b84"
+source_ids = ["FG-ADR-EXTSRC-FDB-ARXIV-12032672-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:5fb8ac063e751099"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-QUERY-FREE-JOIN-0001"
+decision_id = "FG-ADR-SOTA-QUERY-FREE-JOIN"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:b69a18738275f199"
+source_ids = ["FG-ADR-EXTSRC-FREEJOIN-ARXIV-230110841-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:2b58dddc6348c517"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-QUERY-GQL-STANDARDS-0001"
+decision_id = "FG-ADR-SOTA-QUERY-GQL-STANDARDS"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:00851f90271588e5"
+source_ids = ["FG-ADR-EXTSRC-OPENCYPHER-677CBAFA"]
+outcome = "drift_detected"
+record_fingerprint = "fnv1a64:fa6defb501af723b"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-QUERY-KUZU-0001"
+decision_id = "FG-ADR-SOTA-QUERY-KUZU"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:e26fe32c388fe4f8"
+source_ids = ["FG-ADR-EXTSRC-KUZU-CIDR-2023", "FG-ADR-EXTSRC-KUZU-COLUMNAR-PVLDB14"]
+outcome = "current"
+record_fingerprint = "fnv1a64:53171022c3706d0a"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-QUERY-MODERN-ENGINE-0001"
+decision_id = "FG-ADR-SOTA-QUERY-MODERN-ENGINE"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:39c07523cc51e04a"
+source_ids = ["FG-ADR-EXTSRC-LEANSTORE-ICDE-2018", "FG-ADR-EXTSRC-MORSEL-SIGMOD-2014", "FG-ADR-EXTSRC-UMBRA-CIDR-2020"]
+outcome = "current"
+record_fingerprint = "fnv1a64:091644b6a984cde8"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-QUERY-WCOJ-0001"
+decision_id = "FG-ADR-SOTA-QUERY-WCOJ"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:0be86faba7d00d80"
+source_ids = ["FG-ADR-EXTSRC-ADOPT-PVLDB16", "FG-ADR-EXTSRC-EMPTYHEADED-SIGMOD-2016", "FG-ADR-EXTSRC-HONEYCOMB-ARXIV-250206715-V1", "FG-ADR-EXTSRC-NPRR-ARXIV-12031952-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:abce7e0594288aa3"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-STORAGE-AEONG-0001"
+decision_id = "FG-ADR-SOTA-STORAGE-AEONG"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:5e1a10738d44cec3"
+source_ids = ["FG-ADR-EXTSRC-AEONG-ARXIV-230412212-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:432dedacf6b1ffcb"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-STORAGE-ASPEN-0001"
+decision_id = "FG-ADR-SOTA-STORAGE-ASPEN"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:454605cf2783a4af"
+source_ids = ["FG-ADR-EXTSRC-ASPEN-ARXIV-190408380-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:175e945ee7cfaf55"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-STORAGE-CSR-0001"
+decision_id = "FG-ADR-SOTA-STORAGE-CSR"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:23913e63b7a64413"
+source_ids = ["FG-ADR-EXTSRC-SORTLEDTON-PVLDB15"]
+outcome = "current"
+record_fingerprint = "fnv1a64:6f0b2c1b0461bf77"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-STORAGE-DELTA-CHAIN-FIELD-0001"
+decision_id = "FG-ADR-SOTA-STORAGE-DELTA-CHAIN-FIELD"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:4f4b7f9ae2283fff"
+source_ids = ["FG-ADR-EXTSRC-DGS-FIELD-ARXIV-250210959-V1", "FG-ADR-EXTSRC-GTX-ARXIV-240501418-V1", "FG-ADR-EXTSRC-RADIXGRAPH-ARXIV-260101444-V1", "FG-ADR-EXTSRC-RAPIDSTORE-ARXIV-250700839-V1"]
+outcome = "drift_detected"
+record_fingerprint = "fnv1a64:fad864170a715415"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-STORAGE-LIVEGRAPH-0001"
+decision_id = "FG-ADR-SOTA-STORAGE-LIVEGRAPH"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:529403538a8b8ecc"
+source_ids = ["FG-ADR-EXTSRC-LIVEGRAPH-ARXIV-191005773-V1"]
+outcome = "current"
+record_fingerprint = "fnv1a64:3f8b9e6b9340a348"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-STORAGE-SORTLEDTON-0001"
+decision_id = "FG-ADR-SOTA-STORAGE-SORTLEDTON"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:3a6cbed550cd9d9e"
+source_ids = ["FG-ADR-EXTSRC-SORTLEDTON-PVLDB15"]
+outcome = "current"
+record_fingerprint = "fnv1a64:840d9ba01dfe113b"
+
+[[external_review]]
+id = "FG-ADR-REVIEW-SOTA-STORAGE-TESEO-0001"
+decision_id = "FG-ADR-SOTA-STORAGE-TESEO"
+sequence = 1
+predecessor = ""
+reviewed_at = "2026-07-22"
+claim_fingerprint = "fnv1a64:9c0eda8c99f3573c"
+source_ids = ["FG-ADR-EXTSRC-TESEO-PVLDB14"]
+outcome = "current"
+record_fingerprint = "fnv1a64:dd4e075be016bd7f"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:architecture_decisions"
+status = "live"
+evidence_scope = "governance"
+checker_id = "cargo-test:architecture_decisions"
+package = "registry-check"
+target = "architecture_decisions"
+selector = "architecture_registry_parses_and_validates"
+command_argv = ["cargo", "test", "-p", "registry-check", "--test", "architecture_decisions", "architecture_registry_parses_and_validates", "--", "--exact"]
+
+[[verification_entrypoint]]
+entrypoint = "e2e:g0_architecture_decisions"
+status = "live"
+evidence_scope = "governance"
+checker_id = "e2e:g0_architecture_decisions"
+command_argv = ["scripts/g0_architecture_decisions_e2e.sh"]
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:region-quiescence"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:capability-context-matrix"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:lab-runtime-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:proof-lane-resolution"
+status = "live"
+evidence_scope = "implementation"
+checker_id = "cargo-test:proof-lane-resolution"
+package = "registry-check"
+target = "claims"
+selector = "claims_proof_lane_manifest_resolves"
+command_argv = ["cargo", "test", "-p", "registry-check", "--test", "claims", "claims_proof_lane_manifest_resolves", "--", "--exact"]
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:raptorq-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:atp-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:adapter-parity"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:channel-obligation-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:service-supervision"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:raft-specific-state-machine"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:macaroon-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:io-memory-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:sextant-assumption-registration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:database-specific-distributed-protocols"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:simulation-forensics-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:optimizer-certificate-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-check:workspace-dependency-policy"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-check:unsafe-boundary-policy"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:cx-boundary-matrix"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:strict-replay"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "e2e:posture-parity"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:recovery-equation"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-check:negative-architecture-policy"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:decision-classification"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:claims"
+status = "live"
+evidence_scope = "implementation"
+checker_id = "cargo-test:claims"
+package = "registry-check"
+target = "claims"
+selector = "claims_real_registries_validate"
+command_argv = ["cargo", "test", "-p", "registry-check", "--test", "claims", "claims_real_registries_validate", "--", "--exact"]
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:operation-cost-derivability"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:prism-fnx-differential"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:graphview-interface-gate"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:cgse-certificate-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:legacy-format-integration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:generator-fixture-pinning"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:chronicle-scrub"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:fnx-ordering-differential"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:mvcc-oracle"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:ssi-oracle"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:merge-ladder-differential"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:chronicle-recovery"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:write-coordinator-faults"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:buffer-manager"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:history-retention"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:crypto-composition"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:differential-conformance"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:strata-reference-model"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:codec-equivalence"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:language-conformance"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:optimizer-oracle"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:executor-differential"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:wcoj-complexity-witness"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:incremental-vs-recompute"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:index-coverage-authority"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:stats-security-fallback"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:fgp-state-machine"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:sextant-evidence"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:transparency-proof-scope"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:raft-state-machine"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:csr-run-equivalence"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:delta-block-reference-model"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:storage-tail-gates"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:overflow-log-bounds"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:run-sharing-snapshots"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:representation-equivalence"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:temporal-history-oracle"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:free-join-plan-space"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:factorization-preservation"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:morsel-cancellation"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:gql-feature-matrix"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:algebra-closure"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:maintainer-recompute-differential"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:vector-coverage-recall"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:fts-exactness"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:market-claim-review-metadata"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:language-contract-closure"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:data-model-contract"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:two-fsync-crash-matrix"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:read-contract-matrix"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:representation-enum-closure"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:linalg-operator-boundary"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:plan-race-cutover"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:w12-scalar-clock"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:single-transaction-lane"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:udf-capability-boundary"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:threat-model-closure"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:index-exact-fallback"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:point-index-fail-closed"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:conformal-coverage"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:eprocess-filtration"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:regime-signal-fallback"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:estimator-risk-evidence"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:ope-support-firewall"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:tail-fit-diagnostics"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:envelope-assumption-fallback"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:submodular-premise-check"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:escrow-conservation"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:replay-completeness"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:privacy-accounting"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:mttdl-assumption-disclosure"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:distributed-building-block-scopes"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:temporal-connectivity-differential"
+status = "planned"
+evidence_scope = "implementation"
+
+[[verification_entrypoint]]
+entrypoint = "cargo-test:one-lever-benchmark-gates"
+status = "planned"
+evidence_scope = "implementation"

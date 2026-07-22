@@ -163,10 +163,10 @@ pub const PINNED_EXTERNAL_REVIEW_DECISION_COUNT: usize = 64;
 pub const PINNED_DECISION_ID_HASH: &str = "fnv1a64:21402ba5834603dd";
 pub const PINNED_BIBLIOGRAPHY_ID_HASH: &str = "fnv1a64:212896d82dc8caf7";
 pub const PINNED_BIBLIOGRAPHY_ANCHOR_HASH: &str = "fnv1a64:35bc497bde8cd1d4";
-pub const PINNED_SEMANTIC_CONTRACT_HASH: &str = "fnv1a64:84ca8d7f5731306e";
+pub const PINNED_SEMANTIC_CONTRACT_HASH: &str = "fnv1a64:501f9025e428f1ba";
 // Filled from the independently reviewed append-only source/review transcript.
 // This is intentionally separate from `PINNED_SEMANTIC_CONTRACT_HASH`.
-pub const PINNED_EXTERNAL_REVIEW_HISTORY_HASH: &str = "fnv1a64:0000000000000000";
+pub const PINNED_EXTERNAL_REVIEW_HISTORY_HASH: &str = "fnv1a64:5e15e3d99eec84ac";
 
 /// All non-bibliography counts are deliberately pinned.  Bibliography is
 /// normalized independently and its registry count is checked against the
@@ -1093,7 +1093,7 @@ fn embedded_between_markers<'a>(
 fn source_expected(block: &SourceBlock) -> Option<(usize, usize, usize, usize, &'static str)> {
     match block.id.as_str() {
         "plan-thesis-foundations-sota-v1" => Some((1, 184, 184, 46_176, "0xb09e44e4eec5c18a")),
-        "plan-reviewed-bibliography-v1" => Some((3120, 3123, 4, 4_741, "0xba0fcc184882baec")),
+        "plan-reviewed-bibliography-v1" => Some((3196, 3199, 4, 4_741, "0xba0fcc184882baec")),
         _ => None,
     }
 }
@@ -4918,19 +4918,18 @@ fn validate_verification_entrypoint_registry(
                 ),
             ));
         }
-        if let Some(checker_id) = declaration.checker_id.as_deref() {
-            if let Some(prior) = checker_owners.insert(checker_id, &declaration.entrypoint) {
-                if prior != declaration.entrypoint {
-                    violations.push(Violation::global(
-                        "verification_entrypoint_checker_reused",
-                        "verification_closure",
-                        format!(
-                            "checker {checker_id:?} is shared by entrypoints {prior:?} and {:?}",
-                            declaration.entrypoint
-                        ),
-                    ));
-                }
-            }
+        if let Some(checker_id) = declaration.checker_id.as_deref()
+            && let Some(prior) = checker_owners.insert(checker_id, &declaration.entrypoint)
+            && prior != declaration.entrypoint
+        {
+            violations.push(Violation::global(
+                "verification_entrypoint_checker_reused",
+                "verification_closure",
+                format!(
+                    "checker {checker_id:?} is shared by entrypoints {prior:?} and {:?}",
+                    declaration.entrypoint
+                ),
+            ));
         }
         match declaration.status.as_str() {
             "live" => {
@@ -4942,23 +4941,23 @@ fn validate_verification_entrypoint_registry(
                     violations.push(Violation::global(code, "verification_closure", message));
                 }
             }
-            "planned" => {
+            "planned"
                 if declaration.checker_id.is_some()
                     || declaration.package.is_some()
                     || declaration.target.is_some()
                     || declaration.selector.is_some()
-                    || declaration.command_argv.is_some()
-                {
-                    violations.push(Violation::global(
-                        "planned_verification_invocation_present",
-                        "verification_closure",
-                        format!(
-                            "planned verification entrypoint {:?} cannot carry checker or invocation metadata",
-                            declaration.entrypoint
-                        ),
-                    ));
-                }
+                    || declaration.command_argv.is_some() =>
+            {
+                violations.push(Violation::global(
+                    "planned_verification_invocation_present",
+                    "verification_closure",
+                    format!(
+                        "planned verification entrypoint {:?} cannot carry checker or invocation metadata",
+                        declaration.entrypoint
+                    ),
+                ));
             }
+            "planned" => {}
             _ => {}
         }
     }
