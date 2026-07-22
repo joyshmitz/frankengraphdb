@@ -339,6 +339,7 @@ pub enum CensusErrorKind {
     InvalidSliceId,
     InvalidSliceRange,
     InvalidUtf8,
+    SourceCoordinateOverflow,
     SliceGap,
     SliceOverlap,
     SliceOutsideSource,
@@ -467,18 +468,6 @@ impl<'a> SourceMap<'a> {
             start_line,
             line_starts,
         }
-    }
-
-    fn line_count(&self) -> usize {
-        if self.source.is_empty() {
-            0
-        } else {
-            self.line_starts.len()
-        }
-    }
-
-    fn end_line(&self) -> usize {
-        self.start_line + self.line_count().saturating_sub(1)
     }
 
     fn position(&self, offset: usize) -> SourcePosition {
@@ -731,7 +720,7 @@ fn is_generic_angle_open(text: &str, index: usize) -> bool {
         return false;
     };
     (is_identifier_continue(previous) || matches!(previous, b'>' | b']'))
-        && (is_identifier_start(next) || matches!(next, b'?' | b'['))
+        && (is_identifier_start(next) || matches!(next, b'?' | b'[' | b'{'))
 }
 
 fn matching_delimiter(text: &str, open_index: usize) -> Result<usize, DelimiterIssue> {
@@ -1152,6 +1141,7 @@ struct ProseLink {
 struct BoldLink {
     display_name: String,
     declaration_range: Range<usize>,
+    expression_range: Range<usize>,
     rhs_fragment: usize,
 }
 
@@ -1195,6 +1185,11 @@ fn prose_schema_links(
                     break;
                 };
                 let candidate = &fragments[candidate_index];
+                if simple_type_display(&candidate.text).is_some()
+                    && has_definition_cue(&candidate.after)
+                {
+                    break;
+                }
                 if prose_body_candidate(&display_name, &candidate.text) {
                     rhs_fragments.push(candidate_index);
                     scan += 1;
@@ -1210,6 +1205,12 @@ fn prose_schema_links(
                 }
                 stopped = sentence_ends(&candidate.after);
                 scan += 1;
+            }
+            if rhs_fragments.first().is_some_and(|index| {
+                leading_assignment(&fragments[*index].text)
+                    .is_some_and(|(assigned, _)| assigned == display_name)
+            }) {
+                continue;
             }
             if !rhs_fragments.is_empty() && cue_names_union(&cue) {
                 let mut separator_seen = false;
@@ -1271,10 +1272,19 @@ fn bold_schema_links(fragments: &[MarkdownFragment]) -> Vec<BoldLink> {
         else {
             continue;
         };
+        let expression_range = if let Some((assigned, rhs)) = leading_assignment(&fragment.text) {
+            if assigned != display_name {
+                continue;
+            }
+            fragment.source_range.start + rhs.start..fragment.source_range.start + rhs.end
+        } else {
+            fragment.source_range.clone()
+        };
         links.push(BoldLink {
             display_name,
             declaration_range: before_source_start + candidate_range.start
                 ..before_source_start + candidate_range.end,
+            expression_range,
             rhs_fragment: index,
         });
     }
@@ -1362,7 +1372,7 @@ fn direct_schemas_from_inline(
     claimed_by_link: bool,
     occurrences: &mut Vec<SchemaOccurrence>,
     ambiguities: &mut Vec<AmbiguityOccurrence>,
-    claimed_fragments: &mut BTreeSet<usize>,
+    claimed_ranges: &mut Vec<Range<usize>>,
 ) {
     let whole = MappedText::from_source(source, fragment.source_range.clone());
     if leading_assignment(&fragment.text).is_none()
@@ -1395,7 +1405,7 @@ fn direct_schemas_from_inline(
                         "inline alias contains an unbalanced or mismatched delimiter",
                     ));
                     occurrences.push(occurrence);
-                    claimed_fragments.insert(fragment.id);
+                    claimed_ranges.push(fragment.source_range.clone());
                     return;
                 }
             }
@@ -1427,7 +1437,7 @@ fn direct_schemas_from_inline(
                         "inline record has no balanced closing delimiter",
                     ));
                     occurrences.push(occurrence);
-                    claimed_fragments.insert(fragment.id);
+                    claimed_ranges.push(fragment.source_range.clone());
                     return;
                 }
             }
@@ -1450,6 +1460,9 @@ fn direct_schemas_from_inline(
         }
         let text = &fragment.text[trimmed.clone()];
         let mapped = whole.subrange(trimmed.clone());
+        if claimed_by_link {
+            continue;
+        }
         if let Some((display, rhs)) = leading_assignment(text) {
             let display_length = parse_type_display(text)
                 .map(|(_, consumed)| consumed)
@@ -1462,11 +1475,8 @@ fn direct_schemas_from_inline(
                 Some(mapped.subrange(rhs)),
             ) {
                 occurrences.push(occurrence);
-                claimed_fragments.insert(fragment.id);
+                claimed_ranges.push(mapped.source_range(0..mapped.text.len()));
             }
-            continue;
-        }
-        if claimed_by_link && !matches!(top_level_assignment(text), Ok(Some(_))) {
             continue;
         }
         let Some((display, open_index)) = leading_record(text) else {
@@ -1504,7 +1514,7 @@ fn direct_schemas_from_inline(
                         });
                     }
                     occurrences.push(occurrence);
-                    claimed_fragments.insert(fragment.id);
+                    claimed_ranges.push(mapped.source_range(0..mapped.text.len()));
                 }
             }
             Err(issue) => {
@@ -1524,7 +1534,7 @@ fn direct_schemas_from_inline(
                         "inline record has no balanced closing delimiter",
                     ));
                     occurrences.push(occurrence);
-                    claimed_fragments.insert(fragment.id);
+                    claimed_ranges.push(mapped.source_range(0..mapped.text.len()));
                 }
             }
         }
@@ -1536,7 +1546,7 @@ fn direct_schemas_from_fence(
     source: &str,
     occurrences: &mut Vec<SchemaOccurrence>,
     ambiguities: &mut Vec<AmbiguityOccurrence>,
-    claimed_fragments: &mut BTreeSet<usize>,
+    claimed_ranges: &mut Vec<Range<usize>>,
 ) {
     let whole = MappedText::from_source(source, fragment.source_range.clone());
     let mut cursor = 0;
@@ -1568,7 +1578,8 @@ fn direct_schemas_from_fence(
                             Some(whole.subrange(candidate_start..expression_end)),
                         ) {
                             occurrences.push(occurrence);
-                            claimed_fragments.insert(fragment.id);
+                            claimed_ranges
+                                .push(whole.source_range(candidate_start..expression_end));
                         }
                         cursor = close_index + 1;
                         continue;
@@ -1591,7 +1602,8 @@ fn direct_schemas_from_fence(
                                 "fenced declaration has no balanced closing delimiter",
                             ));
                             occurrences.push(occurrence);
-                            claimed_fragments.insert(fragment.id);
+                            claimed_ranges
+                                .push(whole.source_range(candidate_start..fragment.text.len()));
                         }
                         break;
                     }
@@ -1624,7 +1636,7 @@ fn extract_schema_occurrences(
     );
 
     let mut occurrences = Vec::new();
-    let mut claimed_fragments = BTreeSet::new();
+    let mut claimed_ranges = Vec::new();
     for fragment in fragments {
         match fragment.kind {
             FragmentKind::Fence => direct_schemas_from_fence(
@@ -1632,7 +1644,7 @@ fn extract_schema_occurrences(
                 source_map.source,
                 &mut occurrences,
                 &mut ambiguities,
-                &mut claimed_fragments,
+                &mut claimed_ranges,
             ),
             FragmentKind::Inline => direct_schemas_from_inline(
                 fragment,
@@ -1640,7 +1652,7 @@ fn extract_schema_occurrences(
                 linked_rhs.contains(&fragment.id),
                 &mut occurrences,
                 &mut ambiguities,
-                &mut claimed_fragments,
+                &mut claimed_ranges,
             ),
         }
     }
@@ -1654,11 +1666,11 @@ fn extract_schema_occurrences(
             link.declaration_range,
             Some(MappedText::from_source(
                 source_map.source,
-                fragment.source_range.clone(),
+                link.expression_range,
             )),
         ) {
             occurrences.push(occurrence);
-            claimed_fragments.insert(fragment.id);
+            claimed_ranges.push(fragment.source_range.clone());
         }
     }
 
@@ -1699,21 +1711,41 @@ fn extract_schema_occurrences(
             Some(expression),
         ) {
             occurrences.push(occurrence);
-            claimed_fragments.extend(link.rhs_fragments.iter().map(|index| fragments[*index].id));
+            claimed_ranges.extend(ranges);
         }
         let _ = link.cue;
     }
 
+    claimed_ranges.sort_by_key(|range| (range.start, range.end));
     for fragment in fragments {
-        if structural_fragment(&fragment.text) && !claimed_fragments.contains(&fragment.id) {
+        let mut cursor = fragment.source_range.start;
+        let mut unclaimed = Vec::new();
+        for claimed in claimed_ranges.iter().filter(|claimed| {
+            claimed.start < fragment.source_range.end && claimed.end > fragment.source_range.start
+        }) {
+            let claimed_start = claimed.start.max(fragment.source_range.start);
+            let claimed_end = claimed.end.min(fragment.source_range.end);
+            if cursor < claimed_start {
+                unclaimed.push(cursor..claimed_start);
+            }
+            cursor = cursor.max(claimed_end);
+        }
+        if cursor < fragment.source_range.end {
+            unclaimed.push(cursor..fragment.source_range.end);
+        }
+        for range in unclaimed {
+            let text = &source_map.source[range.clone()];
+            if !structural_fragment(text) {
+                continue;
+            }
             ambiguities.push(AmbiguityOccurrence {
                 kind: AmbiguityKind::UnownedStructuralFragment,
                 schema_family: None,
                 path: None,
-                raw: normalize_whitespace(&fragment.text),
+                raw: normalize_whitespace(text),
                 reason: "schema-like notation has no owner under the conservative source grammar"
                     .to_owned(),
-                source_range: fragment.source_range.clone(),
+                source_range: range,
             });
         }
     }
@@ -1725,6 +1757,8 @@ fn extract_schema_occurrences(
             occurrence.key.family.clone(),
             occurrence.key.generic_signature.clone(),
             line,
+            occurrence.declaration_range.start,
+            occurrence.declaration_range.end,
             occurrence.expression_sha256.clone(),
         );
         unique.entry(key).or_insert(occurrence);
@@ -2186,8 +2220,8 @@ fn parse_record_fields(
         let mut exact_type = exact_range
             .as_ref()
             .map(|range| normalize_whitespace(&field_mapped.text[range.clone()]));
-        if optional_marker {
-            exact_type = Some(format!("{}?", exact_type.unwrap_or_default()));
+        if optional_marker && let Some(value) = exact_type.as_mut() {
+            value.push('?');
         }
         let field_path = format!("{path}.{name}");
         let raw = normalize_whitespace(&field_mapped.text);
@@ -2249,11 +2283,18 @@ fn parse_record_fields(
         }
         match outermost_record_ranges(&exact_mapped.text) {
             Ok(record_ranges) => {
-                for (open, close) in record_ranges {
+                let multiple_records = record_ranges.len() > 1;
+                for (record_index, (open, close)) in record_ranges.into_iter().enumerate() {
                     let nested_name = trailing_upper_identifier(&exact_mapped.text[..open]);
                     let nested_path = nested_name
                         .map(|name| format!("{field_path}.{name}"))
-                        .unwrap_or_else(|| format!("{field_path}.record"));
+                        .unwrap_or_else(|| {
+                            if multiple_records {
+                                format!("{field_path}.record[{}]", record_index + 1)
+                            } else {
+                                format!("{field_path}.record")
+                            }
+                        });
                     parse_record_fields(
                         schema,
                         &exact_mapped.subrange(open + 1..close),
@@ -2325,17 +2366,20 @@ fn extract_fields_and_arms(
             if parse_union(schema, &mapped, &schema.display_name, &mut rows, 0) {
                 continue;
             }
-            if !mapped.text.trim().is_empty() {
-                rows.ambiguities.push(AmbiguityOccurrence {
-                    kind: AmbiguityKind::AliasExpressionUnparsed,
-                    schema_family: Some(schema.key.family.clone()),
-                    path: Some(schema.display_name.clone()),
-                    raw: normalize_whitespace(&mapped.text),
-                    reason: "alias body is neither a top-level pipe union nor a record body"
-                        .to_owned(),
-                    source_range: mapped.source_range(0..mapped.text.len()),
-                });
-            }
+            let empty = mapped.text.trim().is_empty();
+            rows.ambiguities.push(AmbiguityOccurrence {
+                kind: AmbiguityKind::AliasExpressionUnparsed,
+                schema_family: Some(schema.key.family.clone()),
+                path: Some(schema.display_name.clone()),
+                raw: normalize_whitespace(&mapped.text),
+                reason: if empty {
+                    "alias declaration has an empty right-hand side"
+                } else {
+                    "alias body is neither a top-level pipe union nor a record body"
+                }
+                .to_owned(),
+                source_range: mapped.source_range(0..mapped.text.len()),
+            });
             continue;
         }
         parse_record_fields(schema, &mapped, &schema.display_name, &mut rows, 0);
@@ -2773,8 +2817,20 @@ pub fn census_appendix_source(
             "Appendix source census requires at least one slice",
         ));
     }
+    let source_line_count = 1 + source
+        .bytes()
+        .enumerate()
+        .filter(|(index, byte)| *byte == b'\n' && index + 1 < source.len())
+        .count();
+    let Some(checked_source_end_line) = source_start_line.checked_add(source_line_count - 1) else {
+        return Err(census_error(
+            CensusErrorKind::SourceCoordinateOverflow,
+            None,
+            "Appendix source line coordinates exceed usize",
+        ));
+    };
     let source_map = SourceMap::new(source, source_start_line);
-    let source_end_line = source_map.end_line();
+    let source_end_line = checked_source_end_line;
     let mut ordered_slices = slices.to_vec();
     ordered_slices.sort_by_key(|slice| (slice.start_line, slice.end_line, slice.id));
     let mut seen_ids = BTreeSet::new();
@@ -3209,11 +3265,13 @@ mod tests {
             "`Evidence` is stable with `Other=7`, then stops.\n",
             "`SecurityBasis` is the exact embedded `u16` union ",
             "`0x0001 Local{x:u8}|0x0002 Meta{y:u16}`.\n",
+            "`Thing` is exactly `Thing = {x:u8}`.\n",
+            "`First` is stable; `Second` is `{y:u16}`.\n",
         );
         let slices = [SourceSliceSpec {
             id: "prose",
             start_line: 30,
-            end_line: 31,
+            end_line: 33,
         }];
         let census = census_appendix_source(source.as_bytes(), 30, &slices)
             .expect("prose ownership must be conservative and deterministic");
@@ -3242,6 +3300,30 @@ mod tests {
                 .iter()
                 .any(|schema| schema.key.family == "Other")
         );
+        let thing = census
+            .schemas
+            .iter()
+            .find(|schema| schema.key.family == "Thing")
+            .expect("same-owner explicit assignment is parsed once by direct grammar");
+        assert_eq!(thing.locations.len(), 1);
+        assert!(!thing.body_conflict);
+        assert!(
+            census
+                .schemas
+                .iter()
+                .find(|schema| schema.key.family == "First")
+                .is_some_and(|schema| {
+                    schema
+                        .owner_statuses
+                        .contains(&super::SchemaOwnerStatus::NamedConceptNoBody)
+                })
+        );
+        assert!(
+            census
+                .fields
+                .iter()
+                .any(|field| field.key.schema_family == "Second")
+        );
     }
 
     #[test]
@@ -3268,16 +3350,67 @@ mod tests {
     }
 
     #[test]
+    fn residual_structure_empty_alias_and_same_line_duplicates_stay_visible() {
+        let source = concat!(
+            "`Empty =`.\n",
+            "`Good={x:u8}; ?|!`.\n",
+            "```text\nFence{x:u8}\n?|!\n```\n",
+            "`Twin={x:u8}; Twin={x:u8}`.\n",
+            "`Nested={pair:Pair<{x:u8},{x:u16}>,maybe?}`.\n",
+        );
+        let slices = [SourceSliceSpec {
+            id: "coverage",
+            start_line: 90,
+            end_line: 97,
+        }];
+        let census = census_appendix_source(source.as_bytes(), 90, &slices)
+            .expect("every residual structural region must be claimed or ambiguous");
+        assert!(census.ambiguities.iter().any(|row| {
+            row.key.kind == AmbiguityKind::AliasExpressionUnparsed
+                && row.key.schema_family.as_deref() == Some("Empty")
+        }));
+        assert_eq!(
+            census
+                .ambiguities
+                .iter()
+                .filter(|row| row.key.kind == AmbiguityKind::UnownedStructuralFragment)
+                .count(),
+            2
+        );
+        let twin = census
+            .schemas
+            .iter()
+            .find(|schema| schema.key.family == "Twin")
+            .expect("same-line declarations share a candidate but retain occurrences");
+        assert_eq!(twin.locations.len(), 2);
+        assert_eq!(
+            census
+                .fields
+                .iter()
+                .filter(|field| field.key.schema_family == "Nested" && field.key.stable_name == "x")
+                .count(),
+            2
+        );
+        let maybe = census
+            .fields
+            .iter()
+            .find(|field| field.key.stable_name == "maybe")
+            .expect("optional shorthand field remains visible");
+        assert!(maybe.exact_types.is_empty());
+    }
+
+    #[test]
     fn bold_owner_location_and_conflicts_retain_exact_evidence() {
         let source = concat!(
             "**BoldOwner**: `{x:u8}`.\n",
             "`Same = Left{x:u8}|Right`.\n",
             "`Same = Left{x:u16}|Other`.\n",
+            "**Assigned**: `Assigned={z:u8}`.\n",
         );
         let slices = [SourceSliceSpec {
             id: "evidence",
             start_line: 70,
-            end_line: 72,
+            end_line: 73,
         }];
         let census = census_appendix_source(source.as_bytes(), 70, &slices)
             .expect("bold owners and divergent candidates must retain evidence");
@@ -3288,6 +3421,19 @@ mod tests {
             .expect("bold owner must be captured");
         assert_eq!(bold.locations[0].start.line, 70);
         assert_eq!(bold.locations[0].start.column, 3);
+        let assigned = census
+            .schemas
+            .iter()
+            .find(|schema| schema.key.family == "Assigned")
+            .expect("bold same-owner assignment must normalize to its RHS");
+        assert_eq!(assigned.locations.len(), 1);
+        assert!(!assigned.body_conflict);
+        assert!(
+            census
+                .fields
+                .iter()
+                .any(|field| field.key.schema_family == "Assigned")
+        );
 
         let same = census
             .schemas
@@ -3449,5 +3595,14 @@ mod tests {
         assert_eq!(census.slices.len(), 2);
         assert_eq!(census.slices[0].source_byte_count, 6);
         assert_eq!(census.slices[1].source_byte_count, 7);
+
+        let overflowing = [SourceSliceSpec {
+            id: "overflow",
+            start_line: usize::MAX,
+            end_line: usize::MAX,
+        }];
+        let error = census_appendix_source(b"first\nsecond", usize::MAX, &overflowing)
+            .expect_err("unrepresentable source coordinates must not panic");
+        assert_eq!(error.kind, CensusErrorKind::SourceCoordinateOverflow);
     }
 }

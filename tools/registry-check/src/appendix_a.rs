@@ -5,6 +5,11 @@
 //! registries; deterministic rendering and byte comparison prevent those
 //! projections from becoming independent authorities.
 
+use crate::appendix_reference::census_plan_references;
+use crate::appendix_source::{
+    AppendixSourceCensus, SchemaCandidate, SchemaOwnerStatus, SourceSliceSpec,
+    census_appendix_source,
+};
 use crate::hash::sha256_hex;
 use crate::identity::{self, IdentityRegistries};
 use crate::toml::{self, Table, Value};
@@ -25,12 +30,12 @@ pub const PLAN_PATH: &str = "COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENGRAPHDB
 pub const SOURCE_ENCODING: &str = "utf-8-lf";
 pub const HASH_ALGORITHM: &str = "sha256";
 
-pub const APPENDIX_START_LINE: i64 = 1384;
-pub const APPENDIX_END_LINE: i64 = 2654;
-pub const APPENDIX_LINE_COUNT: i64 = 1271;
-pub const APPENDIX_BYTE_COUNT: i64 = 950_365;
+pub const APPENDIX_START_LINE: i64 = 1388;
+pub const APPENDIX_END_LINE: i64 = 2728;
+pub const APPENDIX_LINE_COUNT: i64 = 1341;
+pub const APPENDIX_BYTE_COUNT: i64 = 1_020_717;
 pub const APPENDIX_SHA256: &str =
-    "db855855638b3df0001ccd2a7f0801943bb33ed59291421497149f71196201ff";
+    "71a48b67304f94568590f79c5b1c1ee4731819aee022c57fece78a7e72bce7f1";
 pub const APPENDIX_HEADING: &str = "## Appendix A — On-Disk Object Formats (normative contract)";
 pub const NEXT_HEADING: &str = "## Appendix B — Graph Intent Log (the semantic vocabulary)";
 pub const EXPECTED_PROJECTION_ROW_COUNT: usize = 128;
@@ -493,8 +498,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a01",
         bead_id: "fgdb-a01-reference-roots-2k0q",
         title: "Appendix A exact catalog: Reference semantics, RootSlot, and RootBootstrap",
-        start_line: 1384,
-        end_line: 1440,
+        start_line: 1388,
+        end_line: 1444,
         line_count: 57,
         byte_count: 23_172,
         sha256: "102b572835f29cfa6b8ec5d22a5a2ef9a9c9cd8d0998f4136a914b031812b25b",
@@ -504,8 +509,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a02",
         bead_id: "fgdb-a02-filesystem-cipher-dsi3",
         title: "Appendix A exact catalog: Filesystem, cipher, encoding, placement, and symbols",
-        start_line: 1441,
-        end_line: 1459,
+        start_line: 1445,
+        end_line: 1463,
         line_count: 19,
         byte_count: 5_157,
         sha256: "f11543ab928994a39eeeee6e7154e75375e94f82a2e2b1640401d70c27a330d2",
@@ -515,19 +520,19 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a03",
         bead_id: "fgdb-a03-local-state-txn-rxjg",
         title: "Appendix A exact catalog: Local logical state and durable transaction formats",
-        start_line: 1460,
-        end_line: 1537,
-        line_count: 78,
-        byte_count: 66_780,
-        sha256: "c7602e569223eed2b230de305ed40f16f11f52670f97b2e5ca94fef3bf4824e6",
+        start_line: 1464,
+        end_line: 1543,
+        line_count: 80,
+        byte_count: 69_062,
+        sha256: "9d761919535cdd27ad4783e5862ce119293973789e55db627ecc9d7bc0983db4",
     },
     SlicePin {
         ordinal: 4,
         id: "a04",
         bead_id: "fgdb-a04-manifest-raft-4tgi",
         title: "Appendix A exact catalog: RootManifest, configuration, Raft, and cross-group trust prelude",
-        start_line: 1538,
-        end_line: 1583,
+        start_line: 1544,
+        end_line: 1589,
         line_count: 46,
         byte_count: 30_907,
         sha256: "ecd43f46a9ffd2be372922bf81bf589ab625778eef10d5d13828aa5939b37c2d",
@@ -537,19 +542,19 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a05",
         bead_id: "fgdb-a05-w12-role-transition-wjj2",
         title: "Appendix A exact catalog: W12 Genesis, role transition, and activation formats",
-        start_line: 1584,
-        end_line: 1652,
+        start_line: 1590,
+        end_line: 1658,
         line_count: 69,
-        byte_count: 59_030,
-        sha256: "8f11565a0d29d115bbd4919b3ccbd808a2b0319ebf635c380b599a7010c8856d",
+        byte_count: 61_610,
+        sha256: "cd20fc0a748b360856af14324c0d5e03b087b4dea68e673b351fc1ed59e8dd2d",
     },
     SlicePin {
         ordinal: 6,
         id: "a06",
         bead_id: "fgdb-a06-w12-core-zdzx",
         title: "Appendix A exact catalog: W12 Meta and Shard semantic core formats",
-        start_line: 1653,
-        end_line: 1694,
+        start_line: 1659,
+        end_line: 1700,
         line_count: 42,
         byte_count: 38_061,
         sha256: "18baef688b553fcb72987e546f95138b598f32a1389eeb72426a5f925684496e",
@@ -559,19 +564,19 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a07",
         bead_id: "fgdb-a07-w12-txn-results-yt4z",
         title: "Appendix A exact catalog: W12 transaction, statement, result, and outcome formats",
-        start_line: 1695,
-        end_line: 1784,
+        start_line: 1701,
+        end_line: 1790,
         line_count: 90,
-        byte_count: 86_794,
-        sha256: "386e56f68638c6054ebc7cc30f9c33c0a708f88fb100eab6b21cc425f5b6056a",
+        byte_count: 87_339,
+        sha256: "1b3a393d03ffbecec17b95f09be8b30067bd7803d1bc2e1176a83876a056f114",
     },
     SlicePin {
         ordinal: 8,
         id: "a08",
         bead_id: "fgdb-a08-w12-lifecycle-pr7j",
         title: "Appendix A exact catalog: W12 retention, compaction, reconfiguration, GC, and topology formats",
-        start_line: 1785,
-        end_line: 1883,
+        start_line: 1791,
+        end_line: 1889,
         line_count: 99,
         byte_count: 92_121,
         sha256: "9bee4c412d4ebb7df1d274528aa0b8e82033d1fb052db3b1a7e08bf4461f2481",
@@ -581,8 +586,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a09",
         bead_id: "fgdb-a09-storage-identity-02tl",
         title: "Appendix A exact catalog: Strata run, identity continuity, allocator, and lease formats",
-        start_line: 1884,
-        end_line: 1903,
+        start_line: 1890,
+        end_line: 1909,
         line_count: 20,
         byte_count: 12_328,
         sha256: "eea5d9f7257bfefee5cae1077bbe3f17d4948267736dcd79e24d530f2a1873df",
@@ -592,8 +597,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a10",
         bead_id: "fgdb-a10-command-delta-ooy1",
         title: "Appendix A exact catalog: Committed effects, commands, and logical delta formats",
-        start_line: 1904,
-        end_line: 1925,
+        start_line: 1910,
+        end_line: 1931,
         line_count: 22,
         byte_count: 16_579,
         sha256: "7bad384e377f49ef7d102eefda083260874790f6af47f85d0b344ea4c0854e9e",
@@ -603,19 +608,19 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a11",
         bead_id: "fgdb-a11-delivery-markers-sdh6",
         title: "Appendix A exact catalog: Delivery cursors, envelopes, markers, and physical batching",
-        start_line: 1926,
-        end_line: 1957,
+        start_line: 1932,
+        end_line: 1963,
         line_count: 32,
-        byte_count: 7_290,
-        sha256: "19d0983f080d27922bf566a2973504bf2b60fc75b3902ecbe0e1c8396015bdaf",
+        byte_count: 7_956,
+        sha256: "6efc3cb10c5e8755ae149b92c6189743a9604f222e160a889787d5ba0e7441e3",
     },
     SlicePin {
         ordinal: 12,
         id: "a12",
         bead_id: "fgdb-a12-checkpoint-resources-m9jz",
         title: "Appendix A exact catalog: Checkpoint, retention, constraint, and resource formats",
-        start_line: 1958,
-        end_line: 1993,
+        start_line: 1964,
+        end_line: 1999,
         line_count: 36,
         byte_count: 19_488,
         sha256: "1d9f07d6ccc7c5feb548224d9e5f38ef216143c1dfd63f95ebcf6e84907b76c6",
@@ -625,8 +630,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a13",
         bead_id: "fgdb-a13-branch-merge-g2ko",
         title: "Appendix A exact catalog: Branch manifest, key grants, retirement, and merge formats",
-        start_line: 1994,
-        end_line: 2028,
+        start_line: 2000,
+        end_line: 2034,
         line_count: 35,
         byte_count: 17_149,
         sha256: "1901c5bda19eb47aba710870dc0bd87c2184b4142f5ed51d6b8db732401031f8",
@@ -636,8 +641,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a14",
         bead_id: "fgdb-a14-ha-payload-gc-jb82",
         title: "Appendix A exact catalog: Payload availability, configuration floors, and GC epoch formats",
-        start_line: 2029,
-        end_line: 2050,
+        start_line: 2035,
+        end_line: 2056,
         line_count: 22,
         byte_count: 17_540,
         sha256: "de90db8cd87f7b9c4b168ed9357580ffb8e9c64f60ef643ba48f872daf566e93",
@@ -647,8 +652,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a15",
         bead_id: "fgdb-a15-key-backup-n77c",
         title: "Appendix A exact catalog: Key destruction, backup, publication, and release formats",
-        start_line: 2051,
-        end_line: 2150,
+        start_line: 2057,
+        end_line: 2156,
         line_count: 100,
         byte_count: 79_596,
         sha256: "d68ac8d8b85c3bf56b836b34430d4fac668418d07f186cdcb01c6e4838ac828e",
@@ -658,8 +663,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a16",
         bead_id: "fgdb-a16-time-authority-ytub",
         title: "Appendix A exact catalog: Rollback-protected authority-time formats and rotation",
-        start_line: 2151,
-        end_line: 2240,
+        start_line: 2157,
+        end_line: 2246,
         line_count: 90,
         byte_count: 69_768,
         sha256: "9fc751b96c0539ad956995a3e0bde2fe71e58fe4103aa80cbce9d1c687273427",
@@ -669,8 +674,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a17",
         bead_id: "fgdb-a17-restore-prebootstrap-hy9w",
         title: "Appendix A exact catalog: Restore prebootstrap journal and source acquisition formats",
-        start_line: 2241,
-        end_line: 2342,
+        start_line: 2247,
+        end_line: 2348,
         line_count: 102,
         byte_count: 72_597,
         sha256: "660aaee44fbc117b6f49156c9f95ec3e1843d9ae171e54f4e08daf435c456cd5",
@@ -680,8 +685,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a18",
         bead_id: "fgdb-a18-restore-registry-exjt",
         title: "Appendix A exact catalog: Restore registry, cleanup, terminal history, and abandonment formats",
-        start_line: 2343,
-        end_line: 2452,
+        start_line: 2349,
+        end_line: 2458,
         line_count: 110,
         byte_count: 94_976,
         sha256: "5fc84607d338774d06f4dcd1a0aed6f48165f427c7da4716b90d4bbbc949161c",
@@ -691,8 +696,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a19",
         bead_id: "fgdb-a19-restore-readiness-fd0j",
         title: "Appendix A exact catalog: Restore lease barrier, reservations, bridge, and readiness formats",
-        start_line: 2453,
-        end_line: 2568,
+        start_line: 2459,
+        end_line: 2574,
         line_count: 116,
         byte_count: 77_017,
         sha256: "65c5015fa2243b33579d5b1b6d78ac3e0d55f9b0fcc10c482bbc02a2ebd4d9c0",
@@ -702,8 +707,8 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a20",
         bead_id: "fgdb-a20-restore-promotion-ivsp",
         title: "Appendix A exact catalog: Restore promotion, independent reopen, completion, and release formats",
-        start_line: 2569,
-        end_line: 2602,
+        start_line: 2575,
+        end_line: 2608,
         line_count: 34,
         byte_count: 22_805,
         sha256: "6f1b942c046041d3ecefb159e0e86b30a673f03ca86b44dac921ad98ef07a064",
@@ -713,11 +718,11 @@ pub const SLICE_PINS: [SlicePin; 21] = [
         id: "a21",
         bead_id: "fgdb-a21-replay-security-ye0o",
         title: "Appendix A exact catalog: Replay, authorization, capability, DP, audit, and transparency formats",
-        start_line: 2603,
-        end_line: 2654,
-        line_count: 52,
-        byte_count: 41_210,
-        sha256: "8149f67df01ff6f93810e9e419faef9f890710a524dcdda0580ae352561fcaa0",
+        start_line: 2609,
+        end_line: 2728,
+        line_count: 120,
+        byte_count: 105_489,
+        sha256: "af85ba1bf3128769a81c3f83c1f0a77543c3f2df14bbf86f22f37cd356b29dae",
     },
 ];
 
@@ -1740,7 +1745,9 @@ pub fn verify_source(catalog: &Catalog, source: &[u8]) -> Vec<Violation> {
             "ordered slice bytes do not reconstruct the complete Appendix bytes",
         ));
     }
-    verify_source_census(catalog, source, &line_spans, &mut out);
+    if let Some(structural_census) = verify_structural_source_census(catalog, appendix, &mut out) {
+        verify_reference_source_census(catalog, source, &structural_census, &mut out);
+    }
 
     sort_violations(&mut out);
     out
@@ -1934,87 +1941,381 @@ fn fenced_definition_candidate(line: &[u8]) -> Option<String> {
         .then_some(family)
 }
 
-fn verify_source_census(
+fn verify_structural_source_census(
     catalog: &Catalog,
-    source: &[u8],
-    _spans: &[(usize, usize)],
+    appendix: &[u8],
+    out: &mut Vec<Violation>,
+) -> Option<AppendixSourceCensus> {
+    let source_start_line = match usize::try_from(catalog.source_manifest.start_line) {
+        Ok(line) if line > 0 => line,
+        _ => {
+            out.push(Violation::new(
+                "source_census_range_invalid",
+                "source_manifest",
+                "source census requires a positive Appendix start line",
+            ));
+            return None;
+        }
+    };
+    let mut specs = Vec::with_capacity(catalog.slices.len());
+    for slice in &catalog.slices {
+        let (Ok(start_line), Ok(end_line)) = (
+            usize::try_from(slice.start_line),
+            usize::try_from(slice.end_line),
+        ) else {
+            out.push(Violation::new(
+                "source_census_range_invalid",
+                &slice.id,
+                "slice source coordinates must fit positive machine-sized integers",
+            ));
+            return None;
+        };
+        specs.push(SourceSliceSpec {
+            id: &slice.id,
+            start_line,
+            end_line,
+        });
+    }
+
+    let census = match census_appendix_source(appendix, source_start_line, &specs) {
+        Ok(census) => census,
+        Err(error) => {
+            out.push(Violation::new(
+                "source_structural_census_error",
+                error.slice_id.as_deref().unwrap_or("source_manifest"),
+                error.to_string(),
+            ));
+            return None;
+        }
+    };
+
+    let census_by_slice: BTreeMap<&str, _> = census
+        .slices
+        .iter()
+        .map(|slice| (slice.slice_id.as_str(), slice))
+        .collect();
+    for slice in &catalog.slices {
+        let Some(actual) = census_by_slice.get(slice.id.as_str()).copied() else {
+            out.push(Violation::new(
+                "source_structural_slice_missing",
+                &slice.id,
+                "structural census did not return this declared slice",
+            ));
+            continue;
+        };
+        for (kind, expected_count, expected_sha256, actual_digest) in [
+            (
+                "top_level_candidate",
+                slice.top_level_candidate_count,
+                slice.top_level_candidate_ids_sha256.as_str(),
+                &actual.transcripts.schemas,
+            ),
+            (
+                "field_candidate",
+                slice.field_candidate_count,
+                slice.field_candidate_ids_sha256.as_str(),
+                &actual.transcripts.fields,
+            ),
+            (
+                "union_candidate",
+                slice.union_candidate_count,
+                slice.union_candidate_ids_sha256.as_str(),
+                &actual.transcripts.unions,
+            ),
+            (
+                "arm_candidate",
+                slice.arm_candidate_count,
+                slice.arm_candidate_ids_sha256.as_str(),
+                &actual.transcripts.arms,
+            ),
+            (
+                "ambiguity",
+                slice.ambiguity_count,
+                slice.ambiguity_ids_sha256.as_str(),
+                &actual.transcripts.ambiguities,
+            ),
+        ] {
+            let actual_count = i64::try_from(actual_digest.rows).unwrap_or(i64::MAX);
+            if expected_count != actual_count || expected_sha256 != actual_digest.sha256 {
+                out.push(Violation::new(
+                    "source_structural_census_mismatch",
+                    &slice.id,
+                    format!(
+                        "{kind} pin expected {expected_count}/{expected_sha256}, found {actual_count}/{}",
+                        actual_digest.sha256
+                    ),
+                ));
+            }
+        }
+    }
+
+    verify_top_level_source_candidates(catalog, &census, out);
+    verify_structural_target_source_keys(catalog, &census, out);
+    Some(census)
+}
+
+fn verify_structural_target_source_keys(
+    catalog: &Catalog,
+    census: &AppendixSourceCensus,
     out: &mut Vec<Violation>,
 ) {
-    let census = strong_ref_census(source);
-    if census.families.len() != EXPECTED_TYPE_RESERVATION_COUNT
-        || census.family_sha256 != EXPECTED_SOURCE_FAMILY_SHA256
-    {
-        out.push(Violation::new(
-            "source_family_census_drift",
-            "source_manifest",
-            format!(
-                "expected {EXPECTED_TYPE_RESERVATION_COUNT} StrongRef families with sha256 {EXPECTED_SOURCE_FAMILY_SHA256}; found {} with sha256 {}",
-                census.families.len(), census.family_sha256
-            ),
-        ));
+    let source_keys: BTreeSet<String> = census
+        .schemas
+        .iter()
+        .map(|row| row.key.source_key())
+        .chain(census.fields.iter().map(|row| row.key.source_key()))
+        .chain(census.unions.iter().map(|row| row.key.source_key()))
+        .chain(census.arms.iter().map(|row| row.key.source_key()))
+        .collect();
+    for target in &catalog.targets {
+        if target.slice_id == "g0" || target.source_key.starts_with("reference|") {
+            continue;
+        }
+        if !source_keys.contains(&target.source_key) {
+            out.push(Violation::new(
+                "source_target_key_missing",
+                &target.row_id,
+                format!(
+                    "target source_key {:?} is absent from the structural source census",
+                    target.source_key
+                ),
+            ));
+        }
     }
-    if census.location_pair_count != EXPECTED_SOURCE_LOCATION_PAIR_COUNT
-        || census.location_sha256 != EXPECTED_SOURCE_LOCATION_SHA256
-    {
-        out.push(Violation::new(
-            "source_location_census_drift",
-            "source_manifest",
-            format!(
-                "expected {EXPECTED_SOURCE_LOCATION_PAIR_COUNT} family/location pairs with sha256 {EXPECTED_SOURCE_LOCATION_SHA256}; found {} with sha256 {}",
-                census.location_pair_count, census.location_sha256
-            ),
-        ));
+}
+
+fn verify_top_level_source_candidates(
+    catalog: &Catalog,
+    census: &AppendixSourceCensus,
+    out: &mut Vec<Violation>,
+) {
+    let mut expected = BTreeMap::new();
+    for slice in &census.slices {
+        for candidate in &slice.schemas {
+            let source_key = candidate.key.source_key();
+            let locations = structural_locations(catalog, &candidate.locations);
+            expected.insert(
+                source_key,
+                (
+                    slice.slice_id.as_str(),
+                    candidate.key.family.as_str(),
+                    candidate.key.generic_signature.as_str(),
+                    structural_source_kind(candidate),
+                    locations,
+                ),
+            );
+        }
     }
-    let definitions = definition_census(source, &census);
-    if definitions.first_locations.len() != EXPECTED_DEFINED_SOURCE_FAMILY_COUNT
-        || definitions.family_sha256 != EXPECTED_DEFINED_SOURCE_FAMILY_SHA256
-        || definitions.location_sha256 != EXPECTED_DEFINITION_LOCATION_SHA256
+    let actual: BTreeMap<&str, &TopLevelCandidate> = catalog
+        .top_level_candidates
+        .iter()
+        .map(|row| (row.source_key.as_str(), row))
+        .collect();
+
+    for (source_key, (slice_id, symbol, generic_signature, source_kind, locations)) in &expected {
+        match actual.get(source_key.as_str()).copied() {
+            Some(row)
+                if row.slice_id == *slice_id
+                    && row.symbol == *symbol
+                    && row.generic_signature == *generic_signature
+                    && row.source_kind == *source_kind
+                    && row.source_locations == *locations => {}
+            Some(row) => out.push(Violation::new(
+                "source_top_level_candidate_mismatch",
+                &row.row_id,
+                format!("catalog row does not exactly match source candidate {source_key:?}"),
+            )),
+            None => out.push(Violation::new(
+                "source_top_level_candidate_missing",
+                source_key,
+                "source-derived top-level candidate has no catalog row",
+            )),
+        }
+    }
+    for (source_key, row) in actual {
+        if !expected.contains_key(source_key) {
+            out.push(Violation::new(
+                "source_top_level_candidate_orphan",
+                &row.row_id,
+                format!("catalog candidate {source_key:?} is absent from the source census"),
+            ));
+        }
+    }
+}
+
+fn verify_reference_source_census(
+    catalog: &Catalog,
+    source: &[u8],
+    structural: &AppendixSourceCensus,
+    out: &mut Vec<Violation>,
+) {
+    let census = match census_plan_references(source) {
+        Ok(census) => census,
+        Err(error) => {
+            out.push(Violation::new(
+                error.code,
+                "reference_manifest",
+                format!(
+                    "reference census failed at line {}, column {}",
+                    error.line, error.column
+                ),
+            ));
+            return;
+        }
+    };
+    let target_count = i64::try_from(census.target_count).unwrap_or(i64::MAX);
+    let occurrence_count = i64::try_from(census.occurrence_count).unwrap_or(i64::MAX);
+    let manifest = &catalog.reference_manifest;
+    if manifest.target_count != target_count
+        || manifest.target_ids_sha256 != census.target_ids_sha256
+        || manifest.occurrence_count != occurrence_count
+        || manifest.occurrence_transcript_sha256 != census.occurrence_transcript_sha256
     {
         out.push(Violation::new(
-            "source_definition_census_drift",
-            "source_manifest",
+            "reference_source_manifest_mismatch",
+            "reference_manifest",
             format!(
-                "expected {EXPECTED_DEFINED_SOURCE_FAMILY_COUNT} defined families with family sha256 {EXPECTED_DEFINED_SOURCE_FAMILY_SHA256} and location sha256 {EXPECTED_DEFINITION_LOCATION_SHA256}; found {} with family sha256 {} and location sha256 {}",
-                definitions.first_locations.len(),
-                definitions.family_sha256,
-                definitions.location_sha256
+                "reference source census is {target_count}/{}/{} occurrences/{}",
+                census.target_ids_sha256, occurrence_count, census.occurrence_transcript_sha256
             ),
         ));
     }
 
-    let catalog_rows: BTreeMap<&str, &SourceSymbolDisposition> = catalog
+    let reservation_symbols: BTreeSet<&str> = catalog
+        .reservations
+        .iter()
+        .map(|row| row.symbol.as_str())
+        .collect();
+    let source_symbols: BTreeSet<&str> = census
+        .targets
+        .iter()
+        .map(|target| target.family.as_str())
+        .collect();
+    for symbol in source_symbols.difference(&reservation_symbols) {
+        out.push(Violation::new(
+            "reference_source_reservation_missing",
+            *symbol,
+            "source-derived reference target has no permanent reservation",
+        ));
+    }
+    for symbol in reservation_symbols.difference(&source_symbols) {
+        out.push(Violation::new(
+            "reference_source_reservation_orphan",
+            *symbol,
+            "permanent reservation is absent from the source-derived reference census",
+        ));
+    }
+
+    let disposition_by_symbol: BTreeMap<&str, &SourceSymbolDisposition> = catalog
         .source_symbol_dispositions
         .iter()
         .filter(|row| row.slice_id != "g0")
         .map(|row| (row.symbol.as_str(), row))
         .collect();
-    for (family, expected_locations) in &census.families {
-        match catalog_rows.get(family.as_str()).copied() {
-            Some(row) if row.source_locations == *expected_locations => {}
+    let structural_dispositions = structural_dispositions(structural);
+    for target in &census.targets {
+        let expected_locations: Vec<String> = target
+            .occurrences
+            .iter()
+            .map(|occurrence| source_location(catalog, occurrence.line))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let expected_disposition = structural_dispositions
+            .get(target.family.as_str())
+            .copied()
+            .unwrap_or("reference-only");
+        match disposition_by_symbol.get(target.family.as_str()).copied() {
+            Some(row)
+                if row.source_locations == expected_locations
+                    && row.disposition == expected_disposition => {}
             Some(row) => out.push(Violation::new(
-                "source_location_census_mismatch",
+                "reference_source_disposition_mismatch",
                 &row.row_id,
                 format!(
-                    "source locations for {family:?} must be {:?}, found {:?}",
-                    expected_locations, row.source_locations
+                    "reference source requires disposition {expected_disposition:?} at {expected_locations:?}"
                 ),
             )),
             None => out.push(Violation::new(
-                "source_family_census_missing",
-                family,
-                "StrongRef family has no catalog source disposition",
+                "reference_source_disposition_missing",
+                &target.family,
+                "source-derived reference target has no source disposition",
             )),
         }
     }
-    for (family, row) in catalog_rows {
-        if !census.families.contains_key(family) {
+    for (symbol, row) in disposition_by_symbol {
+        if !source_symbols.contains(symbol) {
             out.push(Violation::new(
-                "source_family_census_orphan",
+                "reference_source_disposition_orphan",
                 &row.row_id,
-                format!("catalog family {family:?} is absent from the pinned Appendix source"),
+                format!("source disposition {symbol:?} is absent from the reference census"),
             ));
         }
     }
+}
+
+fn structural_source_kind(candidate: &SchemaCandidate) -> &'static str {
+    if candidate
+        .owner_statuses
+        .contains(&SchemaOwnerStatus::ConfirmedTopLevel)
+    {
+        "confirmed"
+    } else if candidate
+        .owner_statuses
+        .contains(&SchemaOwnerStatus::AmbiguousUnownedStructure)
+    {
+        "ambiguous"
+    } else {
+        "name-only"
+    }
+}
+
+fn structural_dispositions(census: &AppendixSourceCensus) -> BTreeMap<&str, &'static str> {
+    let mut kinds: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for candidate in &census.schemas {
+        kinds
+            .entry(candidate.key.family.as_str())
+            .or_default()
+            .insert(structural_source_kind(candidate));
+    }
+    kinds
+        .into_iter()
+        .map(|(family, kinds)| {
+            let disposition = if kinds.contains("confirmed") {
+                "appendix-structural-definition"
+            } else if kinds.contains("ambiguous") {
+                "appendix-ambiguous-structure"
+            } else {
+                "appendix-name-only"
+            };
+            (family, disposition)
+        })
+        .collect()
+}
+
+fn structural_locations(
+    catalog: &Catalog,
+    spans: &[crate::appendix_source::SourceSpan],
+) -> Vec<String> {
+    spans
+        .iter()
+        .map(|span| source_location(catalog, span.start.line))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn source_location(catalog: &Catalog, line: usize) -> String {
+    let slice_id = i64::try_from(line)
+        .ok()
+        .and_then(|line| {
+            catalog
+                .slices
+                .iter()
+                .find(|slice| (slice.start_line..=slice.end_line).contains(&line))
+        })
+        .map_or("plan", |slice| slice.id.as_str());
+    format!("{slice_id}:{line}")
 }
 
 fn strong_ref_families_on_line(line: &[u8]) -> BTreeSet<String> {
@@ -4500,15 +4801,12 @@ fn validate_source_dispositions(
             "appendix-structural-definition"
                 | "appendix-ambiguous-structure"
                 | "appendix-name-only"
-                | "outside-structural-definition"
-                | "outside-ambiguous-structure"
-                | "outside-name-only"
                 | "reference-only"
         ) {
             out.push(Violation::new(
                 "catalog_disposition_invalid",
                 &row.row_id,
-                "reference target requires one truthful structural/name/reference-only disposition",
+                "reference target requires one truthful Appendix structural/name/reference-only disposition",
             ));
         }
         if census_by_symbol.insert(row.symbol.as_str(), row).is_some() {

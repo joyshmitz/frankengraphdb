@@ -8,7 +8,8 @@ use registry_check::architecture::{
     self, ALLOWED_RELATIONSHIP_KINDS, ArchitectureRegistry, PINNED_BEAD_BINDING_HASH,
     PINNED_BEAD_COUNT, PINNED_BET_LABEL_COUNT, PINNED_BIBLIOGRAPHY_COUNT,
     PINNED_BIBLIOGRAPHY_ID_HASH, PINNED_DECISION_COUNT, PINNED_DECISION_ID_HASH,
-    PINNED_DIRECT_OWNER_COUNT, PINNED_EXACT_OVERRIDE_COUNT, PINNED_FAMILY_RULE_COUNT,
+    PINNED_DIRECT_OWNER_COUNT, PINNED_EXACT_OVERRIDE_COUNT, PINNED_EXTERNAL_REVIEW_DECISION_COUNT,
+    PINNED_EXTERNAL_REVIEW_HISTORY_HASH, PINNED_FAMILY_RULE_COUNT,
     PINNED_SEMANTIC_CONTRACT_HASH,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -488,4 +489,330 @@ fn architecture_neg_planned_crate_universe_drift() {
     let mut registry = real_registry();
     registry.registry.planned_crates.pop();
     assert_code(&registry, "planned_crates_pin");
+}
+
+#[test]
+fn architecture_external_review_chains_cover_every_active_foundation_and_sota_claim() {
+    let registry = real_registry();
+    let applicable = registry
+        .decisions
+        .iter()
+        .filter(|decision| {
+            decision.status != "superseded"
+                && (decision.category.starts_with("foundation_")
+                    || decision.category.starts_with("sota_"))
+        })
+        .count();
+    assert_eq!(applicable, PINNED_EXTERNAL_REVIEW_DECISION_COUNT);
+    assert_eq!(
+        registry
+            .external_reviews
+            .iter()
+            .map(|review| review.decision_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        PINNED_EXTERNAL_REVIEW_DECISION_COUNT
+    );
+    assert!(
+        architecture::validate_external_review_contract(&registry).is_empty(),
+        "shipped external-review chains must be complete and current"
+    );
+    assert_eq!(
+        architecture::recompute_external_review_history_hash(&registry),
+        PINNED_EXTERNAL_REVIEW_HISTORY_HASH
+    );
+    assert_eq!(
+        registry.registry.external_review_history_hash,
+        PINNED_EXTERNAL_REVIEW_HISTORY_HASH
+    );
+}
+
+#[test]
+fn architecture_neg_external_review_claim_stales_independently_of_semantic_pin() {
+    let mut registry = real_registry();
+    registry
+        .decisions
+        .iter_mut()
+        .find(|decision| {
+            decision.category.starts_with("foundation_") && decision.status == "frozen"
+        })
+        .expect("frozen foundation decision exists")
+        .summary
+        .push_str(" changed after review");
+
+    let codes: BTreeSet<String> = architecture::validate_external_review_contract(&registry)
+        .into_iter()
+        .map(|violation| violation.code)
+        .collect();
+    assert!(codes.contains("external_review_claim_stale"), "{codes:?}");
+
+    let mut rewritten_tip = real_registry();
+    let decision_id = rewritten_tip
+        .decisions
+        .iter()
+        .find(|decision| {
+            decision.category.starts_with("foundation_") && decision.status == "frozen"
+        })
+        .expect("frozen foundation decision exists")
+        .id
+        .clone();
+    let profile_id = rewritten_tip
+        .decisions
+        .iter()
+        .find(|decision| decision.id == decision_id)
+        .expect("selected decision exists")
+        .profile
+        .clone();
+    rewritten_tip
+        .decisions
+        .iter_mut()
+        .find(|decision| decision.id == decision_id)
+        .expect("selected decision exists")
+        .summary
+        .push_str(" rewritten in place");
+    let new_claim = architecture::recompute_external_review_claim_fingerprint(
+        rewritten_tip
+            .decisions
+            .iter()
+            .find(|decision| decision.id == decision_id)
+            .expect("selected decision exists"),
+        rewritten_tip
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .expect("selected profile exists"),
+    );
+    let tip_index = rewritten_tip
+        .external_reviews
+        .iter()
+        .enumerate()
+        .filter(|(_, review)| review.decision_id == decision_id)
+        .max_by_key(|(_, review)| review.sequence)
+        .map(|(index, _)| index)
+        .expect("selected decision has a review tip");
+    rewritten_tip.external_reviews[tip_index].claim_fingerprint = new_claim;
+    let new_record = architecture::recompute_external_review_record_fingerprint(
+        &rewritten_tip,
+        &rewritten_tip.external_reviews[tip_index],
+    )
+    .expect("self-consistent rewritten review hashes");
+    rewritten_tip.external_reviews[tip_index].record_fingerprint = new_record;
+    rewritten_tip.registry.external_review_history_hash =
+        architecture::recompute_external_review_history_hash(&rewritten_tip);
+
+    let codes: BTreeSet<String> = architecture::validate_external_review_contract(&rewritten_tip)
+        .into_iter()
+        .map(|violation| violation.code)
+        .collect();
+    assert!(
+        codes.contains("independent_external_review_history_hash_mismatch"),
+        "a self-consistent in-place review rewrite must still trip the independent append-only pin: {codes:?}"
+    );
+}
+
+#[test]
+fn architecture_neg_external_review_chain_gap_and_source_tamper() {
+    let mut missing = real_registry();
+    let decision_id = missing
+        .decisions
+        .iter()
+        .find(|decision| decision.category.starts_with("sota_") && decision.status != "superseded")
+        .expect("active SOTA decision exists")
+        .id
+        .clone();
+    missing
+        .external_reviews
+        .retain(|review| review.decision_id != decision_id);
+    let codes: BTreeSet<String> = architecture::validate_external_review_contract(&missing)
+        .into_iter()
+        .map(|violation| violation.code)
+        .collect();
+    assert!(
+        codes.contains("external_review_coverage_missing"),
+        "{codes:?}"
+    );
+
+    let mut broken_predecessor = real_registry();
+    broken_predecessor.external_reviews[0].predecessor = "FG-ADR-REVIEW-NOT-PRIOR".into();
+    let codes: BTreeSet<String> =
+        architecture::validate_external_review_contract(&broken_predecessor)
+            .into_iter()
+            .map(|violation| violation.code)
+            .collect();
+    assert!(codes.contains("external_review_predecessor"), "{codes:?}");
+    assert!(
+        codes.contains("external_review_record_fingerprint"),
+        "{codes:?}"
+    );
+
+    let mut source_tamper = real_registry();
+    source_tamper.external_review_sources[0]
+        .uri
+        .push_str("?mutable=1");
+    let codes: BTreeSet<String> = architecture::validate_external_review_contract(&source_tamper)
+        .into_iter()
+        .map(|violation| violation.code)
+        .collect();
+    assert!(
+        codes.contains("external_review_source_fingerprint"),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains("external_review_record_fingerprint"),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn architecture_live_entrypoints_resolve_exact_targets_and_preserve_scope() {
+    let registry = real_registry();
+    let declaration = registry
+        .verification_entrypoints
+        .iter()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture governance entrypoint is declared");
+    assert_eq!(declaration.status, "live");
+    assert_eq!(declaration.evidence_scope, "governance");
+    assert_eq!(
+        declaration.checker_id.as_deref(),
+        Some("cargo-test:architecture_decisions")
+    );
+
+    let decision_id = &registry.decisions[0].id;
+    let governance = architecture::resolved_live_entrypoints_for_scope(
+        &registry,
+        &repo_root(),
+        decision_id,
+        "governance",
+    )
+    .expect("governance evidence resolves");
+    let implementation = architecture::resolved_live_entrypoints_for_scope(
+        &registry,
+        &repo_root(),
+        decision_id,
+        "implementation",
+    )
+    .expect("implementation evidence query resolves");
+    assert!(governance.contains(&"cargo-test:architecture_decisions".to_string()));
+    assert!(
+        !implementation.contains(&"cargo-test:architecture_decisions".to_string()),
+        "universal ADR governance must never count as subsystem implementation evidence"
+    );
+}
+
+#[test]
+fn architecture_neg_live_entrypoint_checker_target_selector_and_command() {
+    let mut swapped_checker = real_registry();
+    swapped_checker
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists")
+        .checker_id = Some("architecture_decisions".into());
+    assert_code(&swapped_checker, "verification_entrypoint_checker_identity");
+
+    let mut missing_target = real_registry();
+    missing_target
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists")
+        .target = Some("does_not_exist".into());
+    let codes = violation_codes(&missing_target);
+    assert!(
+        codes.contains("verification_entrypoint_target_mismatch"),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains("verification_entrypoint_target_missing"),
+        "{codes:?}"
+    );
+
+    let mut wrong_package = real_registry();
+    wrong_package
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists")
+        .package = Some("not-a-workspace-package".into());
+    assert_code(&wrong_package, "verification_entrypoint_package");
+
+    let mut missing_selector = real_registry();
+    missing_selector
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists")
+        .selector = Some("no_such_test".into());
+    assert_code(&missing_selector, "verification_entrypoint_selector");
+
+    let mut wrong_command = real_registry();
+    wrong_command
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists")
+        .command_argv = Some(vec!["cargo".into(), "test".into()]);
+    assert_code(&wrong_command, "verification_entrypoint_command");
+
+    let mut reused_checker = real_registry();
+    let live = reused_checker
+        .verification_entrypoints
+        .iter()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists")
+        .clone();
+    let planned = reused_checker
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.status == "planned")
+        .expect("planned entrypoint exists");
+    planned.status = "live".into();
+    planned.evidence_scope = "governance".into();
+    planned.checker_id = live.checker_id;
+    planned.package = live.package;
+    planned.target = live.target;
+    planned.selector = live.selector;
+    planned.command_argv = live.command_argv;
+    assert_code(&reused_checker, "verification_entrypoint_checker_reused");
+}
+
+#[test]
+fn architecture_neg_planned_and_governance_entrypoints_cannot_claim_implementation() {
+    let mut planned = real_registry();
+    let declaration = planned
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists");
+    declaration.status = "planned".into();
+    let codes = violation_codes(&planned);
+    assert!(
+        codes.contains("planned_verification_invocation_present"),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains("live_governance_entrypoint_missing"),
+        "{codes:?}"
+    );
+
+    let mut relabeled = real_registry();
+    relabeled
+        .verification_entrypoints
+        .iter_mut()
+        .find(|declaration| declaration.entrypoint == "cargo-test:architecture_decisions")
+        .expect("architecture entrypoint exists")
+        .evidence_scope = "implementation".into();
+    assert_code(&relabeled, "verification_entrypoint_scope_mismatch");
+    let implementation = architecture::resolved_live_entrypoints_for_scope(
+        &relabeled,
+        &repo_root(),
+        &relabeled.decisions[0].id,
+        "implementation",
+    )
+    .expect("scope query resolves");
+    assert!(
+        !implementation.contains(&"cargo-test:architecture_decisions".to_string()),
+        "scope mismatch must fail closed rather than laundering governance as implementation"
+    );
 }

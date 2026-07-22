@@ -8,14 +8,15 @@
 
 use crate::hash::{fnv1a64, id_table_hash};
 use crate::toml::{
-    self, ReadError, Table, Value, get_int, get_str, get_str_array, get_table, get_table_array,
+    self, ReadError, Table, Value, get_int, get_opt_str, get_opt_str_array, get_str, get_str_array,
+    get_table, get_table_array,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Component, Path};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 pub const REGISTRY_NAME: &str = "architecture_decisions";
 pub const DECISION_ID_PREFIX: &str = "FG-ADR-";
 pub const OWNERSHIP_SCOPE: &str = "all_beads_provenance";
@@ -57,6 +58,9 @@ pub const ALLOWED_RELATIONSHIP_KINDS: [&str; 6] = [
 ];
 
 pub const ALLOWED_STATUSES: [&str; 3] = ["frozen", "review_due", "superseded"];
+pub const ALLOWED_VERIFICATION_ENTRYPOINT_STATUSES: [&str; 2] = ["live", "planned"];
+pub const ALLOWED_VERIFICATION_EVIDENCE_SCOPES: [&str; 2] = ["governance", "implementation"];
+pub const ALLOWED_EXTERNAL_REVIEW_OUTCOMES: [&str; 2] = ["current", "drift_detected"];
 
 pub const REQUIRED_SOURCE_BLOCKS: [&str; 2] = [
     "plan-thesis-foundations-sota-v1",
@@ -152,6 +156,7 @@ pub const PLANNED_CRATES: [&str; 70] = [
 
 pub const PINNED_DECISION_COUNT: usize = 256;
 pub const PINNED_BIBLIOGRAPHY_COUNT: usize = 138;
+pub const PINNED_EXTERNAL_REVIEW_DECISION_COUNT: usize = 64;
 
 // Independent code pins keep a self-consistent registry edit from silently
 // removing a row or inverting an adopt/reject decision.
@@ -159,6 +164,9 @@ pub const PINNED_DECISION_ID_HASH: &str = "fnv1a64:21402ba5834603dd";
 pub const PINNED_BIBLIOGRAPHY_ID_HASH: &str = "fnv1a64:212896d82dc8caf7";
 pub const PINNED_BIBLIOGRAPHY_ANCHOR_HASH: &str = "fnv1a64:35bc497bde8cd1d4";
 pub const PINNED_SEMANTIC_CONTRACT_HASH: &str = "fnv1a64:84ca8d7f5731306e";
+// Filled from the independently reviewed append-only source/review transcript.
+// This is intentionally separate from `PINNED_SEMANTIC_CONTRACT_HASH`.
+pub const PINNED_EXTERNAL_REVIEW_HISTORY_HASH: &str = "fnv1a64:0000000000000000";
 
 /// All non-bibliography counts are deliberately pinned.  Bibliography is
 /// normalized independently and its registry count is checked against the
@@ -190,6 +198,7 @@ pub struct RegistryHeader {
     pub required_source_blocks: Vec<String>,
     pub decision_count: usize,
     pub id_table_hash: String,
+    pub external_review_history_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +262,49 @@ pub struct Decision {
     pub status: String,
 }
 
+/// Registry-level declaration for a decision's verification label.  The
+/// declaration separates executable evidence from a planned future gate: a
+/// `live` row must resolve to a live checker-index artifact, while a `planned`
+/// row is never counted as implementation evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerificationEntrypoint {
+    pub entrypoint: String,
+    pub status: String,
+    pub evidence_scope: String,
+    pub checker_id: Option<String>,
+    pub package: Option<String>,
+    pub target: Option<String>,
+    pub selector: Option<String>,
+    pub command_argv: Option<Vec<String>>,
+}
+
+/// Immutable, content-pinned external material consulted by an ADR review.
+/// The checker does not fetch network content; `content_digest` authenticates
+/// the exact bytes reviewed and `source_fingerprint` binds all source metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalReviewSource {
+    pub id: String,
+    pub uri: String,
+    pub published_at: String,
+    pub retrieved_at: String,
+    pub content_digest: String,
+    pub source_fingerprint: String,
+}
+
+/// One append-only review event in a decision-local linear chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalReview {
+    pub id: String,
+    pub decision_id: String,
+    pub sequence: usize,
+    pub predecessor: String,
+    pub reviewed_at: String,
+    pub claim_fingerprint: String,
+    pub source_ids: Vec<String>,
+    pub outcome: String,
+    pub record_fingerprint: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BeadProvenanceConfig {
     pub source_path: String,
@@ -290,6 +342,9 @@ pub struct ArchitectureRegistry {
     pub source_blocks: Vec<SourceBlock>,
     pub profiles: Vec<Profile>,
     pub decisions: Vec<Decision>,
+    pub verification_entrypoints: Vec<VerificationEntrypoint>,
+    pub external_review_sources: Vec<ExternalReviewSource>,
+    pub external_reviews: Vec<ExternalReview>,
     pub bead_provenance: BeadProvenanceConfig,
     pub bead_families: Vec<BeadFamily>,
     pub bead_overrides: Vec<BeadOverride>,
@@ -376,6 +431,7 @@ fn registry_header_from(table: &Table) -> Result<RegistryHeader, ReadError> {
             "required_source_blocks",
             "decision_count",
             "id_table_hash",
+            "external_review_history_hash",
         ],
         ctx,
     )?;
@@ -391,6 +447,7 @@ fn registry_header_from(table: &Table) -> Result<RegistryHeader, ReadError> {
         required_source_blocks: get_str_array(table, "required_source_blocks", ctx)?,
         decision_count: usize_field(table, "decision_count", ctx)?,
         id_table_hash: get_str(table, "id_table_hash", ctx)?,
+        external_review_history_hash: get_str(table, "external_review_history_hash", ctx)?,
     })
 }
 
@@ -525,6 +582,94 @@ fn decision_from(table: &Table, index: usize) -> Result<Decision, ReadError> {
     })
 }
 
+fn verification_entrypoint_from(
+    table: &Table,
+    index: usize,
+) -> Result<VerificationEntrypoint, ReadError> {
+    let ctx = format!("architecture_decisions.toml.verification_entrypoint[{index}]");
+    exact_keys(
+        table,
+        &[
+            "entrypoint",
+            "status",
+            "evidence_scope",
+            "checker_id",
+            "package",
+            "target",
+            "selector",
+            "command_argv",
+        ],
+        &ctx,
+    )?;
+    Ok(VerificationEntrypoint {
+        entrypoint: get_str(table, "entrypoint", &ctx)?,
+        status: get_str(table, "status", &ctx)?,
+        evidence_scope: get_str(table, "evidence_scope", &ctx)?,
+        checker_id: get_opt_str(table, "checker_id", &ctx)?,
+        package: get_opt_str(table, "package", &ctx)?,
+        target: get_opt_str(table, "target", &ctx)?,
+        selector: get_opt_str(table, "selector", &ctx)?,
+        command_argv: get_opt_str_array(table, "command_argv", &ctx)?,
+    })
+}
+
+fn external_review_source_from(
+    table: &Table,
+    index: usize,
+) -> Result<ExternalReviewSource, ReadError> {
+    let ctx = format!("architecture_decisions.toml.external_review_source[{index}]");
+    exact_keys(
+        table,
+        &[
+            "id",
+            "uri",
+            "published_at",
+            "retrieved_at",
+            "content_digest",
+            "source_fingerprint",
+        ],
+        &ctx,
+    )?;
+    Ok(ExternalReviewSource {
+        id: get_str(table, "id", &ctx)?,
+        uri: get_str(table, "uri", &ctx)?,
+        published_at: get_str(table, "published_at", &ctx)?,
+        retrieved_at: get_str(table, "retrieved_at", &ctx)?,
+        content_digest: get_str(table, "content_digest", &ctx)?,
+        source_fingerprint: get_str(table, "source_fingerprint", &ctx)?,
+    })
+}
+
+fn external_review_from(table: &Table, index: usize) -> Result<ExternalReview, ReadError> {
+    let ctx = format!("architecture_decisions.toml.external_review[{index}]");
+    exact_keys(
+        table,
+        &[
+            "id",
+            "decision_id",
+            "sequence",
+            "predecessor",
+            "reviewed_at",
+            "claim_fingerprint",
+            "source_ids",
+            "outcome",
+            "record_fingerprint",
+        ],
+        &ctx,
+    )?;
+    Ok(ExternalReview {
+        id: get_str(table, "id", &ctx)?,
+        decision_id: get_str(table, "decision_id", &ctx)?,
+        sequence: usize_field(table, "sequence", &ctx)?,
+        predecessor: get_str(table, "predecessor", &ctx)?,
+        reviewed_at: get_str(table, "reviewed_at", &ctx)?,
+        claim_fingerprint: get_str(table, "claim_fingerprint", &ctx)?,
+        source_ids: get_str_array(table, "source_ids", &ctx)?,
+        outcome: get_str(table, "outcome", &ctx)?,
+        record_fingerprint: get_str(table, "record_fingerprint", &ctx)?,
+    })
+}
+
 fn bead_provenance_from(table: &Table) -> Result<BeadProvenanceConfig, ReadError> {
     let ctx = "architecture_decisions.toml.bead_provenance";
     exact_keys(
@@ -598,6 +743,9 @@ pub fn architecture_from(root: &Table) -> Result<ArchitectureRegistry, ReadError
             "source_block",
             "profile",
             "decision",
+            "verification_entrypoint",
+            "external_review_source",
+            "external_review",
             "bead_provenance",
             "bead_family",
             "bead_override",
@@ -609,6 +757,9 @@ pub fn architecture_from(root: &Table) -> Result<ArchitectureRegistry, ReadError
         "source_block",
         "profile",
         "decision",
+        "verification_entrypoint",
+        "external_review_source",
+        "external_review",
         "bead_provenance",
         "bead_family",
         "bead_override",
@@ -637,6 +788,29 @@ pub fn architecture_from(root: &Table) -> Result<ArchitectureRegistry, ReadError
         .enumerate()
         .map(|(i, row)| decision_from(row, i))
         .collect::<Result<Vec<_>, _>>()?;
+    let verification_entrypoints = get_table_array(
+        root,
+        "verification_entrypoint",
+        "architecture_decisions.toml",
+    )?
+    .iter()
+    .enumerate()
+    .map(|(i, row)| verification_entrypoint_from(row, i))
+    .collect::<Result<Vec<_>, _>>()?;
+    let external_review_sources = get_table_array(
+        root,
+        "external_review_source",
+        "architecture_decisions.toml",
+    )?
+    .iter()
+    .enumerate()
+    .map(|(i, row)| external_review_source_from(row, i))
+    .collect::<Result<Vec<_>, _>>()?;
+    let external_reviews = get_table_array(root, "external_review", "architecture_decisions.toml")?
+        .iter()
+        .enumerate()
+        .map(|(i, row)| external_review_from(row, i))
+        .collect::<Result<Vec<_>, _>>()?;
     let bead_provenance = bead_provenance_from(get_table(
         root,
         "bead_provenance",
@@ -659,6 +833,9 @@ pub fn architecture_from(root: &Table) -> Result<ArchitectureRegistry, ReadError
         source_blocks,
         profiles,
         decisions,
+        verification_entrypoints,
+        external_review_sources,
+        external_reviews,
         bead_provenance,
         bead_families,
         bead_overrides,
@@ -798,6 +975,7 @@ struct ReferenceCatalog {
 
 #[derive(Debug, Clone)]
 struct CheckerRecord {
+    kind: String,
     artifact: String,
     status: String,
 }
@@ -967,6 +1145,130 @@ fn read_toml(path: &Path) -> Result<Table, String> {
     toml::parse(&text).map_err(|error| format!("{}: {error}", path.display()))
 }
 
+#[derive(Debug)]
+struct WorkspacePackage {
+    relative_path: String,
+    manifest: Table,
+}
+
+fn workspace_member_paths(root: &Path) -> Result<Vec<String>, String> {
+    let manifest = read_toml(&root.join("Cargo.toml"))?;
+    let workspace =
+        get_table(&manifest, "workspace", "Cargo.toml").map_err(|error| error.to_string())?;
+    let members = get_str_array(workspace, "members", "Cargo.toml.workspace")
+        .map_err(|error| error.to_string())?;
+    let mut paths = Vec::new();
+    for member in members {
+        if let Some(parent) = member.strip_suffix("/*") {
+            if !safe_repo_relative(parent) {
+                return Err(format!("unsafe Cargo workspace member glob {member:?}"));
+            }
+            let mut children = fs::read_dir(root.join(parent))
+                .map_err(|error| format!("workspace member glob {member:?}: {error}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("workspace member glob {member:?}: {error}"))?;
+            children.sort_by_key(|entry| entry.file_name());
+            for child in children {
+                if child.path().join("Cargo.toml").is_file() {
+                    let relative = Path::new(parent).join(child.file_name());
+                    paths.push(relative.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        } else if safe_repo_relative(&member) {
+            paths.push(member);
+        } else {
+            return Err(format!("unsafe Cargo workspace member path {member:?}"));
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn resolve_workspace_package(root: &Path, name: &str) -> Result<Option<WorkspacePackage>, String> {
+    let mut resolved = None;
+    for relative_path in workspace_member_paths(root)? {
+        let manifest = read_toml(&root.join(&relative_path).join("Cargo.toml"))?;
+        let package = get_table(&manifest, "package", "workspace member Cargo.toml")
+            .map_err(|error| error.to_string())?;
+        let package_name = get_str(package, "name", "workspace member Cargo.toml.package")
+            .map_err(|error| error.to_string())?;
+        if package_name == name {
+            if resolved.is_some() {
+                return Err(format!(
+                    "Cargo workspace contains duplicate package name {name:?}"
+                ));
+            }
+            resolved = Some(WorkspacePackage {
+                relative_path,
+                manifest,
+            });
+        }
+    }
+    Ok(resolved)
+}
+
+fn cargo_test_artifact(package: &WorkspacePackage, target: &str) -> String {
+    format!("{}/tests/{target}.rs", package.relative_path)
+}
+
+fn cargo_bin_artifact(
+    root: &Path,
+    package: &WorkspacePackage,
+    target: &str,
+) -> Result<Option<String>, String> {
+    if let Some(Value::Array(rows)) = package.manifest.get("bin") {
+        for (index, row) in rows.iter().enumerate() {
+            let Value::Table(row) = row else {
+                return Err(format!("Cargo.toml bin[{index}] is not a table"));
+            };
+            let ctx = format!("Cargo.toml.bin[{index}]");
+            let name = get_str(row, "name", &ctx).map_err(|error| error.to_string())?;
+            if name == target {
+                let path = get_str(row, "path", &ctx).map_err(|error| error.to_string())?;
+                if !safe_repo_relative(&path) {
+                    return Err(format!("Cargo binary {target:?} has unsafe path {path:?}"));
+                }
+                return Ok(Some(format!("{}/{path}", package.relative_path)));
+            }
+        }
+    }
+    let conventional = format!("{}/src/bin/{target}.rs", package.relative_path);
+    Ok(Some(conventional).filter(|path| root.join(path).is_file()))
+}
+
+fn rust_test_selector_count(source: &str, selector: &str) -> usize {
+    let function = format!("fn {selector}");
+    let lines: Vec<&str> = source.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            let line = line.trim_start();
+            line.starts_with(&function) && line[function.len()..].trim_start().starts_with('(')
+        })
+        .filter(|(index, _)| {
+            let start = index.saturating_sub(4);
+            lines[start..*index]
+                .iter()
+                .any(|line| line.trim() == "#[test]")
+        })
+        .count()
+}
+
+#[cfg(unix)]
+fn executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
 fn collect_rows(
     root: &Table,
     array_key: &str,
@@ -1058,9 +1360,24 @@ fn load_reference_catalog(root: &Path) -> Result<ReferenceCatalog, String> {
     {
         let ctx = format!("checker[{index}]");
         let symbol = get_str(row, "symbol", &ctx).map_err(|error| error.to_string())?;
+        let kind = get_str(row, "kind", &ctx).map_err(|error| error.to_string())?;
         let artifact = get_str(row, "artifact", &ctx).map_err(|error| error.to_string())?;
         let status = get_str(row, "status", &ctx).map_err(|error| error.to_string())?;
-        checkers.insert(symbol, CheckerRecord { artifact, status });
+        if checkers
+            .insert(
+                symbol.clone(),
+                CheckerRecord {
+                    kind,
+                    artifact,
+                    status,
+                },
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "checker_index.toml contains duplicate checker symbol {symbol:?}"
+            ));
+        }
     }
 
     let cost_rows = optional_id_registry(
@@ -2050,6 +2367,50 @@ fn valid_verification_entrypoint(value: &str) -> bool {
         })
 }
 
+fn verification_entrypoint_parts(value: &str) -> Option<(&str, &str)> {
+    let (scheme, label) = value.split_once(':')?;
+    valid_verification_entrypoint(value).then_some((scheme, label))
+}
+
+fn checker_kind_for_scheme(scheme: &str) -> Option<&'static str> {
+    match scheme {
+        "cargo-test" => Some("cargo-test"),
+        "cargo-check" => Some("binary"),
+        "e2e" => Some("script"),
+        _ => None,
+    }
+}
+
+fn valid_lower_hex(value: &str, digits: usize) -> bool {
+    value.len() == digits
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_fnv_fingerprint(value: &str) -> bool {
+    value
+        .strip_prefix("fnv1a64:")
+        .is_some_and(|hex| valid_lower_hex(hex, 16))
+}
+
+fn valid_sha256_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| valid_lower_hex(hex, 64))
+}
+
+fn valid_external_source_uri(value: &str) -> bool {
+    value.strip_prefix("https://").is_some_and(|rest| {
+        !rest.is_empty() && !value.bytes().any(|byte| byte.is_ascii_whitespace())
+    })
+}
+
+fn requires_external_review(decision: &Decision) -> bool {
+    decision.status != "superseded"
+        && (decision.category.starts_with("foundation_") || decision.category.starts_with("sota_"))
+}
+
 fn sorted_equal(actual: &[String], expected: &[&str]) -> bool {
     let actual: BTreeSet<&str> = actual.iter().map(String::as_str).collect();
     let expected: BTreeSet<&str> = expected.iter().copied().collect();
@@ -2779,6 +3140,198 @@ fn transcript_array(transcript: &mut Vec<u8>, name: &str, values: &[String]) {
     for value in values {
         transcript_field(transcript, name, &value);
     }
+}
+
+/// Fingerprint the exact immutable metadata for one external source record.
+pub fn recompute_external_review_source_fingerprint(source: &ExternalReviewSource) -> String {
+    let mut transcript = Vec::new();
+    for (name, value) in [
+        ("external_review_source.id", source.id.as_str()),
+        ("external_review_source.uri", source.uri.as_str()),
+        (
+            "external_review_source.published_at",
+            source.published_at.as_str(),
+        ),
+        (
+            "external_review_source.retrieved_at",
+            source.retrieved_at.as_str(),
+        ),
+        (
+            "external_review_source.content_digest",
+            source.content_digest.as_str(),
+        ),
+    ] {
+        transcript_field(&mut transcript, name, value);
+    }
+    format!("fnv1a64:{:016x}", fnv1a64(&transcript))
+}
+
+/// Fingerprint only the externally reviewed claim surface.  This transcript
+/// is deliberately separate from the whole-registry semantic pin: changing a
+/// foundation/SOTA claim and co-updating that pin still leaves the review tip
+/// stale until a new review event is appended.
+pub fn recompute_external_review_claim_fingerprint(
+    decision: &Decision,
+    profile: &Profile,
+) -> String {
+    let mut transcript = Vec::new();
+    for (name, value) in [
+        ("decision.id", decision.id.as_str()),
+        ("decision.category", decision.category.as_str()),
+        ("decision.stable_key", decision.stable_key.as_str()),
+        ("decision.source_block", decision.source_block.as_str()),
+        ("decision.source_anchor", decision.source_anchor.as_str()),
+        ("decision.disposition", decision.disposition.as_str()),
+        (
+            "decision.relationship_kind",
+            decision.relationship_kind.as_str(),
+        ),
+        ("decision.summary", decision.summary.as_str()),
+        ("decision.profile", decision.profile.as_str()),
+        ("profile.rationale", profile.rationale.as_str()),
+    ] {
+        transcript_field(&mut transcript, name, value);
+    }
+    for (name, values) in [
+        ("profile.assumptions", profile.assumptions.as_slice()),
+        (
+            "profile.no_claim_boundary",
+            profile.no_claim_boundary.as_slice(),
+        ),
+        (
+            "profile.verification_strategy",
+            profile.verification_strategy.as_slice(),
+        ),
+        (
+            "profile.negative_evidence_triggers",
+            profile.negative_evidence_triggers.as_slice(),
+        ),
+    ] {
+        transcript_array(&mut transcript, name, values);
+    }
+    format!("fnv1a64:{:016x}", fnv1a64(&transcript))
+}
+
+fn external_review_record_fingerprint_with_predecessor(
+    review: &ExternalReview,
+    sources: &BTreeMap<String, &ExternalReviewSource>,
+    predecessor_fingerprint: Option<&str>,
+) -> Result<String, String> {
+    let mut transcript = Vec::new();
+    let sequence = review.sequence.to_string();
+    for (name, value) in [
+        ("external_review.id", review.id.as_str()),
+        ("external_review.decision_id", review.decision_id.as_str()),
+        ("external_review.sequence", sequence.as_str()),
+        ("external_review.predecessor", review.predecessor.as_str()),
+        ("external_review.reviewed_at", review.reviewed_at.as_str()),
+        (
+            "external_review.claim_fingerprint",
+            review.claim_fingerprint.as_str(),
+        ),
+        ("external_review.outcome", review.outcome.as_str()),
+        (
+            "external_review.predecessor_fingerprint",
+            predecessor_fingerprint.unwrap_or(""),
+        ),
+    ] {
+        transcript_field(&mut transcript, name, value);
+    }
+    transcript_array(
+        &mut transcript,
+        "external_review.source_ids",
+        &review.source_ids,
+    );
+    for source_id in &review.source_ids {
+        let source = sources.get(source_id).ok_or_else(|| {
+            format!(
+                "review {:?} references unknown external source {source_id:?}",
+                review.id
+            )
+        })?;
+        transcript_field(
+            &mut transcript,
+            "external_review.source_fingerprint",
+            &recompute_external_review_source_fingerprint(source),
+        );
+    }
+    Ok(format!("fnv1a64:{:016x}", fnv1a64(&transcript)))
+}
+
+/// Fingerprint one review row using its declared predecessor and the
+/// recomputed immutable source fingerprints from `registry`.
+pub fn recompute_external_review_record_fingerprint(
+    registry: &ArchitectureRegistry,
+    review: &ExternalReview,
+) -> Result<String, String> {
+    let sources: BTreeMap<String, &ExternalReviewSource> = registry
+        .external_review_sources
+        .iter()
+        .map(|source| (source.id.clone(), source))
+        .collect();
+    let predecessor_fingerprint = if review.predecessor.is_empty() {
+        None
+    } else {
+        Some(
+            registry
+                .external_reviews
+                .iter()
+                .find(|candidate| candidate.id == review.predecessor)
+                .ok_or_else(|| {
+                    format!(
+                        "review {:?} references unknown predecessor {:?}",
+                        review.id, review.predecessor
+                    )
+                })?
+                .record_fingerprint
+                .as_str(),
+        )
+    };
+    external_review_record_fingerprint_with_predecessor(review, &sources, predecessor_fingerprint)
+}
+
+/// Independent pin over every immutable external-source row and every review
+/// chain record. The code pin makes rewriting old history distinguishable from
+/// appending a newly reviewed tip, even when the general semantic pin changes.
+pub fn recompute_external_review_history_hash(registry: &ArchitectureRegistry) -> String {
+    let mut transcript = Vec::new();
+    let mut sources: Vec<&ExternalReviewSource> = registry.external_review_sources.iter().collect();
+    sources.sort_by(|left, right| left.id.cmp(&right.id));
+    for source in sources {
+        transcript_field(&mut transcript, "external_review_source.id", &source.id);
+        transcript_field(
+            &mut transcript,
+            "external_review_source.source_fingerprint",
+            &source.source_fingerprint,
+        );
+    }
+    let mut reviews: Vec<&ExternalReview> = registry.external_reviews.iter().collect();
+    reviews.sort_by(|left, right| {
+        (left.decision_id.as_str(), left.sequence, left.id.as_str()).cmp(&(
+            right.decision_id.as_str(),
+            right.sequence,
+            right.id.as_str(),
+        ))
+    });
+    for review in reviews {
+        transcript_field(&mut transcript, "external_review.id", &review.id);
+        transcript_field(
+            &mut transcript,
+            "external_review.decision_id",
+            &review.decision_id,
+        );
+        transcript_field(
+            &mut transcript,
+            "external_review.sequence",
+            &review.sequence.to_string(),
+        );
+        transcript_field(
+            &mut transcript,
+            "external_review.record_fingerprint",
+            &review.record_fingerprint,
+        );
+    }
+    format!("fnv1a64:{:016x}", fnv1a64(&transcript))
 }
 
 /// Canonical pin over the complete sorted decision-ID set.
@@ -3782,6 +4335,1070 @@ fn validate_references(
     }
 }
 
+fn live_verification_resolution_issues(
+    declaration: &VerificationEntrypoint,
+    catalog: &ReferenceCatalog,
+    root: &Path,
+) -> Vec<(&'static str, String)> {
+    let mut issues = Vec::new();
+    let Some((scheme, _)) = verification_entrypoint_parts(&declaration.entrypoint) else {
+        issues.push((
+            "verification_entrypoint_declaration_scheme",
+            format!(
+                "declared verification entrypoint {:?} has an invalid scheme or label",
+                declaration.entrypoint
+            ),
+        ));
+        return issues;
+    };
+    let Some(checker_id) = declaration.checker_id.as_deref() else {
+        issues.push((
+            "live_verification_checker_missing",
+            format!(
+                "live verification entrypoint {:?} has no checker_id",
+                declaration.entrypoint
+            ),
+        ));
+        return issues;
+    };
+    if checker_id != declaration.entrypoint {
+        issues.push((
+            "verification_entrypoint_checker_identity",
+            format!(
+                "live verification entrypoint {:?} must use a dedicated checker with the same full symbol, found {:?}",
+                declaration.entrypoint, checker_id
+            ),
+        ));
+    }
+    let Some(checker) = catalog.checkers.get(checker_id) else {
+        issues.push((
+            "verification_entrypoint_checker_unresolved",
+            format!(
+                "live verification entrypoint {:?} checker {:?} does not resolve in checker_index.toml",
+                declaration.entrypoint, checker_id
+            ),
+        ));
+        return issues;
+    };
+    if checker.status != "live" {
+        issues.push((
+            "verification_entrypoint_checker_not_live",
+            format!(
+                "live verification entrypoint {:?} resolves to checker {:?} with status {:?}",
+                declaration.entrypoint, checker_id, checker.status
+            ),
+        ));
+    }
+    let expected_kind =
+        checker_kind_for_scheme(scheme).expect("valid verification scheme has a checker kind");
+    if checker.kind != expected_kind {
+        issues.push((
+            "verification_entrypoint_kind_mismatch",
+            format!(
+                "verification entrypoint {:?} requires checker kind {:?}, but {:?} is {:?}",
+                declaration.entrypoint, expected_kind, checker_id, checker.kind
+            ),
+        ));
+    }
+    if !safe_repo_relative(&checker.artifact) || !root.join(&checker.artifact).is_file() {
+        issues.push((
+            "verification_entrypoint_artifact_missing",
+            format!(
+                "live verification entrypoint {:?} checker {:?} artifact {:?} is absent or unsafe",
+                declaration.entrypoint, checker_id, checker.artifact
+            ),
+        ));
+    }
+
+    match scheme {
+        "cargo-test" => {
+            let (Some(package_name), Some(target), Some(selector), Some(command_argv)) = (
+                declaration.package.as_deref(),
+                declaration.target.as_deref(),
+                declaration.selector.as_deref(),
+                declaration.command_argv.as_ref(),
+            ) else {
+                issues.push((
+                    "verification_entrypoint_invocation_missing",
+                    format!(
+                        "live cargo-test entrypoint {:?} requires package, target, selector, and command_argv",
+                        declaration.entrypoint
+                    ),
+                ));
+                return issues;
+            };
+            match resolve_workspace_package(root, package_name) {
+                Err(error) => issues.push(("verification_entrypoint_package", error)),
+                Ok(None) => issues.push((
+                    "verification_entrypoint_package",
+                    format!(
+                        "cargo-test entrypoint {:?} package {:?} is not a workspace member",
+                        declaration.entrypoint, package_name
+                    ),
+                )),
+                Ok(Some(package)) => {
+                    let expected_artifact = cargo_test_artifact(&package, target);
+                    if checker.artifact != expected_artifact {
+                        issues.push((
+                            "verification_entrypoint_target_mismatch",
+                            format!(
+                                "cargo-test entrypoint {:?} target resolves to {:?}, checker artifact is {:?}",
+                                declaration.entrypoint, expected_artifact, checker.artifact
+                            ),
+                        ));
+                    }
+                    match fs::read_to_string(root.join(&expected_artifact)) {
+                        Ok(source) => {
+                            let count = rust_test_selector_count(&source, selector);
+                            if count != 1 {
+                                issues.push((
+                                    "verification_entrypoint_selector",
+                                    format!(
+                                        "cargo-test entrypoint {:?} selector {:?} occurs as an exact #[test] function {count} times in {:?}",
+                                        declaration.entrypoint, selector, expected_artifact
+                                    ),
+                                ));
+                            }
+                        }
+                        Err(error) => issues.push((
+                            "verification_entrypoint_target_missing",
+                            format!(
+                                "cargo-test entrypoint {:?} target {:?} cannot be read: {error}",
+                                declaration.entrypoint, expected_artifact
+                            ),
+                        )),
+                    }
+                }
+            }
+            let expected_command = vec![
+                "cargo".to_string(),
+                "test".to_string(),
+                "-p".to_string(),
+                package_name.to_string(),
+                "--test".to_string(),
+                target.to_string(),
+                selector.to_string(),
+                "--".to_string(),
+                "--exact".to_string(),
+            ];
+            if *command_argv != expected_command {
+                issues.push((
+                    "verification_entrypoint_command",
+                    format!(
+                        "cargo-test entrypoint {:?} command_argv must be {:?}",
+                        declaration.entrypoint, expected_command
+                    ),
+                ));
+            }
+            if package_name == "registry-check"
+                && target == "architecture_decisions"
+                && declaration.evidence_scope != "governance"
+            {
+                issues.push((
+                    "verification_entrypoint_scope_mismatch",
+                    format!(
+                        "the architecture_decisions registry-contract target is governance evidence, not {:?} evidence",
+                        declaration.evidence_scope
+                    ),
+                ));
+            }
+        }
+        "cargo-check" => {
+            let (Some(package_name), Some(target), Some(command_argv)) = (
+                declaration.package.as_deref(),
+                declaration.target.as_deref(),
+                declaration.command_argv.as_ref(),
+            ) else {
+                issues.push((
+                    "verification_entrypoint_invocation_missing",
+                    format!(
+                        "live cargo-check entrypoint {:?} requires package, target, and command_argv",
+                        declaration.entrypoint
+                    ),
+                ));
+                return issues;
+            };
+            if declaration.selector.is_some() {
+                issues.push((
+                    "verification_entrypoint_invocation_shape",
+                    format!(
+                        "cargo-check entrypoint {:?} cannot declare a test selector",
+                        declaration.entrypoint
+                    ),
+                ));
+            }
+            match resolve_workspace_package(root, package_name) {
+                Err(error) => issues.push(("verification_entrypoint_package", error)),
+                Ok(None) => issues.push((
+                    "verification_entrypoint_package",
+                    format!(
+                        "cargo-check entrypoint {:?} package {:?} is not a workspace member",
+                        declaration.entrypoint, package_name
+                    ),
+                )),
+                Ok(Some(package)) => match cargo_bin_artifact(root, &package, target) {
+                    Err(error) => issues.push(("verification_entrypoint_target_missing", error)),
+                    Ok(None) => issues.push((
+                        "verification_entrypoint_target_missing",
+                        format!(
+                            "cargo-check entrypoint {:?} binary target {:?} does not exist",
+                            declaration.entrypoint, target
+                        ),
+                    )),
+                    Ok(Some(expected_artifact)) if checker.artifact != expected_artifact => {
+                        issues.push((
+                            "verification_entrypoint_target_mismatch",
+                            format!(
+                                "cargo-check entrypoint {:?} target resolves to {:?}, checker artifact is {:?}",
+                                declaration.entrypoint, expected_artifact, checker.artifact
+                            ),
+                        ));
+                    }
+                    Ok(Some(_)) => {}
+                },
+            }
+            let expected_command = vec![
+                "cargo".to_string(),
+                "check".to_string(),
+                "-p".to_string(),
+                package_name.to_string(),
+                "--bin".to_string(),
+                target.to_string(),
+            ];
+            if *command_argv != expected_command {
+                issues.push((
+                    "verification_entrypoint_command",
+                    format!(
+                        "cargo-check entrypoint {:?} command_argv must be {:?}",
+                        declaration.entrypoint, expected_command
+                    ),
+                ));
+            }
+        }
+        "e2e" => {
+            if declaration.package.is_some()
+                || declaration.target.is_some()
+                || declaration.selector.is_some()
+            {
+                issues.push((
+                    "verification_entrypoint_invocation_shape",
+                    format!(
+                        "e2e entrypoint {:?} cannot declare Cargo package/target/selector fields",
+                        declaration.entrypoint
+                    ),
+                ));
+            }
+            let Some(command_argv) = declaration.command_argv.as_ref() else {
+                issues.push((
+                    "verification_entrypoint_invocation_missing",
+                    format!(
+                        "live e2e entrypoint {:?} requires command_argv",
+                        declaration.entrypoint
+                    ),
+                ));
+                return issues;
+            };
+            let expected_command = vec![checker.artifact.clone()];
+            if *command_argv != expected_command {
+                issues.push((
+                    "verification_entrypoint_command",
+                    format!(
+                        "e2e entrypoint {:?} command_argv must directly execute {:?}",
+                        declaration.entrypoint, checker.artifact
+                    ),
+                ));
+            }
+            if safe_repo_relative(&checker.artifact)
+                && !executable_file(&root.join(&checker.artifact))
+            {
+                issues.push((
+                    "verification_entrypoint_script_not_executable",
+                    format!(
+                        "e2e entrypoint {:?} script {:?} is not executable",
+                        declaration.entrypoint, checker.artifact
+                    ),
+                ));
+            }
+            if checker.artifact == "scripts/g0_architecture_decisions_e2e.sh"
+                && declaration.evidence_scope != "governance"
+            {
+                issues.push((
+                    "verification_entrypoint_scope_mismatch",
+                    format!(
+                        "the architecture-decision E2E is governance evidence, not {:?} evidence",
+                        declaration.evidence_scope
+                    ),
+                ));
+            }
+        }
+        _ => unreachable!("verification_entrypoint_parts rejects unknown schemes"),
+    }
+    issues
+}
+
+fn validate_verification_entrypoint_registry_basic(
+    registry: &ArchitectureRegistry,
+    profiles: &BTreeMap<String, &Profile>,
+    catalog: &ReferenceCatalog,
+    root: &Path,
+    violations: &mut Vec<Violation>,
+) {
+    let mut declarations = BTreeMap::<&str, &VerificationEntrypoint>::new();
+    let mut valid_live = BTreeSet::<&str>::new();
+
+    for declaration in &registry.verification_entrypoints {
+        if declarations
+            .insert(declaration.entrypoint.as_str(), declaration)
+            .is_some()
+        {
+            violations.push(Violation::global(
+                "verification_entrypoint_declaration_duplicate",
+                "verification_closure",
+                format!(
+                    "verification entrypoint {:?} is declared more than once",
+                    declaration.entrypoint
+                ),
+            ));
+        }
+        let parts = verification_entrypoint_parts(&declaration.entrypoint);
+        if parts.is_none() {
+            violations.push(Violation::global(
+                "verification_entrypoint_declaration_scheme",
+                "verification_closure",
+                format!(
+                    "declared verification entrypoint {:?} has an invalid scheme or label",
+                    declaration.entrypoint
+                ),
+            ));
+        }
+        if !ALLOWED_VERIFICATION_ENTRYPOINT_STATUSES.contains(&declaration.status.as_str()) {
+            violations.push(Violation::global(
+                "verification_entrypoint_status",
+                "verification_closure",
+                format!(
+                    "verification entrypoint {:?} has invalid status {:?}",
+                    declaration.entrypoint, declaration.status
+                ),
+            ));
+            continue;
+        }
+        if declaration
+            .checker_id
+            .as_ref()
+            .is_some_and(|checker_id| checker_id.trim().is_empty())
+        {
+            violations.push(Violation::global(
+                "verification_entrypoint_checker_blank",
+                "verification_closure",
+                format!(
+                    "verification entrypoint {:?} has a blank checker_id",
+                    declaration.entrypoint
+                ),
+            ));
+        }
+
+        match declaration.status.as_str() {
+            "live" => {
+                let Some(checker_id) = declaration.checker_id.as_deref() else {
+                    violations.push(Violation::global(
+                        "live_verification_checker_missing",
+                        "verification_closure",
+                        format!(
+                            "live verification entrypoint {:?} has no checker_id",
+                            declaration.entrypoint
+                        ),
+                    ));
+                    continue;
+                };
+                let Some(checker) = catalog.checkers.get(checker_id) else {
+                    violations.push(Violation::global(
+                        "verification_entrypoint_checker_unresolved",
+                        "verification_closure",
+                        format!(
+                            "live verification entrypoint {:?} checker {:?} does not resolve in checker_index.toml",
+                            declaration.entrypoint, checker_id
+                        ),
+                    ));
+                    continue;
+                };
+                let mut resolves = true;
+                if checker.status != "live" {
+                    resolves = false;
+                    violations.push(Violation::global(
+                        "verification_entrypoint_checker_not_live",
+                        "verification_closure",
+                        format!(
+                            "live verification entrypoint {:?} resolves to checker {:?} with status {:?}",
+                            declaration.entrypoint, checker_id, checker.status
+                        ),
+                    ));
+                }
+                if let Some((scheme, _)) = parts {
+                    let expected_kind = checker_kind_for_scheme(scheme)
+                        .expect("valid verification scheme has a checker kind");
+                    if checker.kind != expected_kind {
+                        resolves = false;
+                        violations.push(Violation::global(
+                            "verification_entrypoint_kind_mismatch",
+                            "verification_closure",
+                            format!(
+                                "verification entrypoint {:?} requires checker kind {:?}, but {:?} is {:?}",
+                                declaration.entrypoint, expected_kind, checker_id, checker.kind
+                            ),
+                        ));
+                    }
+                } else {
+                    resolves = false;
+                }
+                if !safe_repo_relative(&checker.artifact) || !root.join(&checker.artifact).is_file()
+                {
+                    resolves = false;
+                    violations.push(Violation::global(
+                        "verification_entrypoint_artifact_missing",
+                        "verification_closure",
+                        format!(
+                            "live verification entrypoint {:?} checker {:?} artifact {:?} is absent or unsafe",
+                            declaration.entrypoint, checker_id, checker.artifact
+                        ),
+                    ));
+                }
+                if resolves {
+                    valid_live.insert(declaration.entrypoint.as_str());
+                }
+            }
+            "planned" => {
+                if let Some(checker_id) = declaration.checker_id.as_deref() {
+                    match catalog.checkers.get(checker_id) {
+                        None => violations.push(Violation::global(
+                            "verification_entrypoint_checker_unresolved",
+                            "verification_closure",
+                            format!(
+                                "planned verification entrypoint {:?} checker {:?} does not resolve in checker_index.toml",
+                                declaration.entrypoint, checker_id
+                            ),
+                        )),
+                        Some(checker) if checker.status == "live" => {
+                            violations.push(Violation::global(
+                                "planned_verification_checker_live",
+                                "verification_closure",
+                                format!(
+                                    "planned verification entrypoint {:?} points at already-live checker {:?}",
+                                    declaration.entrypoint, checker_id
+                                ),
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut referenced = BTreeSet::new();
+    for decision in &registry.decisions {
+        let claim_class = claim_classes_for(decision, catalog).join("+");
+        let mut decision_has_live = false;
+        for entrypoint in &decision.verification_entrypoints {
+            referenced.insert(entrypoint.as_str());
+            match declarations.get(entrypoint.as_str()) {
+                None => violations.push(Violation::for_decision(
+                    decision,
+                    profiles,
+                    &claim_class,
+                    "verification_entrypoint_unresolved",
+                    "verification_closure",
+                    format!(
+                        "verification entrypoint {entrypoint:?} has no registry-level declaration"
+                    ),
+                )),
+                Some(_) if valid_live.contains(entrypoint.as_str()) => {
+                    decision_has_live = true;
+                }
+                Some(_) => {}
+            }
+        }
+        if decision.status != "superseded" && !decision_has_live {
+            violations.push(Violation::for_decision(
+                decision,
+                profiles,
+                &claim_class,
+                "live_verification_entrypoint_missing",
+                "verification_closure",
+                "effective decisions require at least one declared entrypoint backed by a live checker artifact",
+            ));
+        }
+    }
+    for declaration in &registry.verification_entrypoints {
+        if !referenced.contains(declaration.entrypoint.as_str()) {
+            violations.push(Violation::global(
+                "verification_entrypoint_declaration_orphan",
+                "verification_closure",
+                format!(
+                    "verification entrypoint declaration {:?} is not referenced by any decision",
+                    declaration.entrypoint
+                ),
+            ));
+        }
+    }
+}
+
+/// Return the decision's entrypoints that are currently backed by exact live
+/// checker targets in the requested evidence scope. In particular, governance
+/// checks can never be returned as implementation evidence.
+pub fn resolved_live_entrypoints_for_scope(
+    registry: &ArchitectureRegistry,
+    root: &Path,
+    decision_id: &str,
+    evidence_scope: &str,
+) -> Result<Vec<String>, String> {
+    if !ALLOWED_VERIFICATION_EVIDENCE_SCOPES.contains(&evidence_scope) {
+        return Err(format!(
+            "unknown verification evidence scope {evidence_scope:?}"
+        ));
+    }
+    let decision = registry
+        .decisions
+        .iter()
+        .find(|decision| decision.id == decision_id)
+        .ok_or_else(|| format!("unknown architecture decision {decision_id:?}"))?;
+    let catalog = load_reference_catalog(root)?;
+    let mut declarations = BTreeMap::new();
+    for declaration in &registry.verification_entrypoints {
+        if declarations
+            .insert(declaration.entrypoint.as_str(), declaration)
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate verification entrypoint declaration {:?}",
+                declaration.entrypoint
+            ));
+        }
+    }
+    let mut resolved = Vec::new();
+    for entrypoint in &decision.verification_entrypoints {
+        let Some(declaration) = declarations.get(entrypoint.as_str()) else {
+            continue;
+        };
+        if declaration.status == "live"
+            && declaration.evidence_scope == evidence_scope
+            && live_verification_resolution_issues(declaration, &catalog, root).is_empty()
+        {
+            resolved.push(entrypoint.clone());
+        }
+    }
+    resolved.sort();
+    resolved.dedup();
+    Ok(resolved)
+}
+
+fn validate_verification_entrypoint_registry(
+    registry: &ArchitectureRegistry,
+    profiles: &BTreeMap<String, &Profile>,
+    catalog: &ReferenceCatalog,
+    root: &Path,
+    violations: &mut Vec<Violation>,
+) {
+    validate_verification_entrypoint_registry_basic(registry, profiles, catalog, root, violations);
+
+    let mut declarations = BTreeMap::<&str, &VerificationEntrypoint>::new();
+    let mut checker_owners = BTreeMap::<&str, &str>::new();
+    let mut valid_live_governance = BTreeSet::<&str>::new();
+    for declaration in &registry.verification_entrypoints {
+        declarations
+            .entry(declaration.entrypoint.as_str())
+            .or_insert(declaration);
+        if !ALLOWED_VERIFICATION_EVIDENCE_SCOPES.contains(&declaration.evidence_scope.as_str()) {
+            violations.push(Violation::global(
+                "verification_entrypoint_evidence_scope",
+                "verification_closure",
+                format!(
+                    "verification entrypoint {:?} has invalid evidence_scope {:?}",
+                    declaration.entrypoint, declaration.evidence_scope
+                ),
+            ));
+        }
+        if let Some(checker_id) = declaration.checker_id.as_deref() {
+            if let Some(prior) = checker_owners.insert(checker_id, &declaration.entrypoint) {
+                if prior != declaration.entrypoint {
+                    violations.push(Violation::global(
+                        "verification_entrypoint_checker_reused",
+                        "verification_closure",
+                        format!(
+                            "checker {checker_id:?} is shared by entrypoints {prior:?} and {:?}",
+                            declaration.entrypoint
+                        ),
+                    ));
+                }
+            }
+        }
+        match declaration.status.as_str() {
+            "live" => {
+                let issues = live_verification_resolution_issues(declaration, catalog, root);
+                if issues.is_empty() && declaration.evidence_scope == "governance" {
+                    valid_live_governance.insert(declaration.entrypoint.as_str());
+                }
+                for (code, message) in issues {
+                    violations.push(Violation::global(code, "verification_closure", message));
+                }
+            }
+            "planned" => {
+                if declaration.checker_id.is_some()
+                    || declaration.package.is_some()
+                    || declaration.target.is_some()
+                    || declaration.selector.is_some()
+                    || declaration.command_argv.is_some()
+                {
+                    violations.push(Violation::global(
+                        "planned_verification_invocation_present",
+                        "verification_closure",
+                        format!(
+                            "planned verification entrypoint {:?} cannot carry checker or invocation metadata",
+                            declaration.entrypoint
+                        ),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for decision in registry
+        .decisions
+        .iter()
+        .filter(|decision| decision.status != "superseded")
+    {
+        let has_live_governance = decision
+            .verification_entrypoints
+            .iter()
+            .any(|entrypoint| valid_live_governance.contains(entrypoint.as_str()));
+        if !has_live_governance {
+            let claim_class = claim_classes_for(decision, catalog).join("+");
+            violations.push(Violation::for_decision(
+                decision,
+                profiles,
+                &claim_class,
+                "live_governance_entrypoint_missing",
+                "verification_closure",
+                "effective decisions require a declared governance entrypoint backed by an exact live checker target",
+            ));
+        }
+    }
+}
+
+fn validate_external_review_contract_into(
+    registry: &ArchitectureRegistry,
+    violations: &mut Vec<Violation>,
+) {
+    let profiles: BTreeMap<String, &Profile> = registry
+        .profiles
+        .iter()
+        .map(|profile| (profile.id.clone(), profile))
+        .collect();
+    let decisions: BTreeMap<String, &Decision> = registry
+        .decisions
+        .iter()
+        .map(|decision| (decision.id.clone(), decision))
+        .collect();
+    let applicable: Vec<&Decision> = registry
+        .decisions
+        .iter()
+        .filter(|decision| requires_external_review(decision))
+        .collect();
+    if applicable.len() != PINNED_EXTERNAL_REVIEW_DECISION_COUNT {
+        violations.push(Violation::global(
+            "external_review_applicable_count",
+            "external_review_coverage",
+            format!(
+                "{} active foundation/SOTA decisions require external review, pinned count is {PINNED_EXTERNAL_REVIEW_DECISION_COUNT}",
+                applicable.len()
+            ),
+        ));
+    }
+
+    let mut sources = BTreeMap::<String, &ExternalReviewSource>::new();
+    for source in &registry.external_review_sources {
+        if sources.insert(source.id.clone(), source).is_some() {
+            violations.push(Violation::global(
+                "external_review_source_id_duplicate",
+                "external_review_source_integrity",
+                format!("duplicate external review source ID {:?}", source.id),
+            ));
+        }
+        if !valid_stable_id(&source.id, "FG-ADR-EXTSRC-") {
+            violations.push(Violation::global(
+                "external_review_source_id_format",
+                "external_review_source_integrity",
+                format!("external review source ID {:?} is malformed", source.id),
+            ));
+        }
+        if !valid_external_source_uri(&source.uri) {
+            violations.push(Violation::global(
+                "external_review_source_uri",
+                "external_review_source_integrity",
+                format!(
+                    "external review source {:?} URI must be a nonblank HTTPS URI without whitespace",
+                    source.id
+                ),
+            ));
+        }
+        if !valid_iso_date(&source.published_at) || !valid_iso_date(&source.retrieved_at) {
+            violations.push(Violation::global(
+                "external_review_source_date",
+                "external_review_source_integrity",
+                format!(
+                    "external review source {:?} has invalid published/retrieved dates {:?}/{:?}",
+                    source.id, source.published_at, source.retrieved_at
+                ),
+            ));
+        } else if source.published_at > source.retrieved_at {
+            violations.push(Violation::global(
+                "external_review_source_date_order",
+                "external_review_source_integrity",
+                format!(
+                    "external review source {:?} was published after it was retrieved",
+                    source.id
+                ),
+            ));
+        }
+        if !valid_sha256_digest(&source.content_digest) {
+            violations.push(Violation::global(
+                "external_review_source_digest",
+                "external_review_source_integrity",
+                format!(
+                    "external review source {:?} content_digest must be sha256 plus 64 lowercase hex digits",
+                    source.id
+                ),
+            ));
+        }
+        let expected = recompute_external_review_source_fingerprint(source);
+        if !valid_fnv_fingerprint(&source.source_fingerprint)
+            || source.source_fingerprint != expected
+        {
+            violations.push(Violation::global(
+                "external_review_source_fingerprint",
+                "external_review_source_integrity",
+                format!(
+                    "external review source {:?} fingerprint {:?} does not match recomputed {:?}",
+                    source.id, source.source_fingerprint, expected
+                ),
+            ));
+        }
+    }
+
+    let mut review_ids = BTreeSet::new();
+    let mut groups = BTreeMap::<String, Vec<&ExternalReview>>::new();
+    let mut referenced_sources = BTreeSet::new();
+    for review in &registry.external_reviews {
+        if !review_ids.insert(review.id.clone()) {
+            violations.push(Violation::global(
+                "external_review_id_duplicate",
+                "external_review_linearity",
+                format!("duplicate external review ID {:?}", review.id),
+            ));
+        }
+        if !valid_stable_id(&review.id, "FG-ADR-REVIEW-") {
+            violations.push(Violation::global(
+                "external_review_id_format",
+                "external_review_linearity",
+                format!("external review ID {:?} is malformed", review.id),
+            ));
+        }
+        let decision = decisions.get(&review.decision_id).copied();
+        match decision {
+            None => violations.push(Violation::global(
+                "external_review_decision_unresolved",
+                "external_review_coverage",
+                format!(
+                    "external review {:?} targets unknown decision {:?}",
+                    review.id, review.decision_id
+                ),
+            )),
+            Some(decision)
+                if !(decision.category.starts_with("foundation_")
+                    || decision.category.starts_with("sota_")) =>
+            {
+                violations.push(Violation::for_decision(
+                    decision,
+                    &profiles,
+                    "architectural_decision",
+                    "external_review_decision_scope",
+                    "external_review_coverage",
+                    format!(
+                        "external review {:?} targets non-foundation/SOTA category {:?}",
+                        review.id, decision.category
+                    ),
+                ));
+            }
+            Some(_) => {
+                groups
+                    .entry(review.decision_id.clone())
+                    .or_default()
+                    .push(review);
+            }
+        }
+        if review.sequence == 0 {
+            violations.push(Violation::global(
+                "external_review_sequence",
+                "external_review_linearity",
+                format!("external review {:?} sequence must start at one", review.id),
+            ));
+        }
+        if !valid_iso_date(&review.reviewed_at) {
+            violations.push(Violation::global(
+                "external_review_date",
+                "external_review_linearity",
+                format!(
+                    "external review {:?} reviewed_at {:?} is not an ISO calendar date",
+                    review.id, review.reviewed_at
+                ),
+            ));
+        }
+        if !valid_fnv_fingerprint(&review.claim_fingerprint) {
+            violations.push(Violation::global(
+                "external_review_claim_fingerprint_format",
+                "external_review_claim_freshness",
+                format!(
+                    "external review {:?} claim_fingerprint is malformed",
+                    review.id
+                ),
+            ));
+        }
+        if !ALLOWED_EXTERNAL_REVIEW_OUTCOMES.contains(&review.outcome.as_str()) {
+            violations.push(Violation::global(
+                "external_review_outcome",
+                "external_review_claim_freshness",
+                format!(
+                    "external review {:?} outcome {:?} is outside the closed set",
+                    review.id, review.outcome
+                ),
+            ));
+        }
+        if review.source_ids.is_empty()
+            || !blank_items(&review.source_ids).is_empty()
+            || !duplicates(&review.source_ids).is_empty()
+            || !review.source_ids.windows(2).all(|pair| pair[0] < pair[1])
+        {
+            violations.push(Violation::global(
+                "external_review_source_ids",
+                "external_review_source_integrity",
+                format!(
+                    "external review {:?} requires nonblank, sorted, unique source_ids",
+                    review.id
+                ),
+            ));
+        }
+        for source_id in &review.source_ids {
+            referenced_sources.insert(source_id.clone());
+            match sources.get(source_id) {
+                None => violations.push(Violation::global(
+                    "external_review_source_unresolved",
+                    "external_review_source_integrity",
+                    format!(
+                        "external review {:?} references unknown source {:?}",
+                        review.id, source_id
+                    ),
+                )),
+                Some(source)
+                    if valid_iso_date(&source.retrieved_at)
+                        && valid_iso_date(&review.reviewed_at)
+                        && source.retrieved_at > review.reviewed_at =>
+                {
+                    violations.push(Violation::global(
+                        "external_review_source_after_review",
+                        "external_review_source_integrity",
+                        format!(
+                            "external review {:?} predates retrieval of source {:?}",
+                            review.id, source_id
+                        ),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        if !valid_fnv_fingerprint(&review.record_fingerprint) {
+            violations.push(Violation::global(
+                "external_review_record_fingerprint_format",
+                "external_review_linearity",
+                format!(
+                    "external review {:?} record_fingerprint is malformed",
+                    review.id
+                ),
+            ));
+        }
+    }
+
+    for source in &registry.external_review_sources {
+        if !referenced_sources.contains(&source.id) {
+            violations.push(Violation::global(
+                "external_review_source_orphan",
+                "external_review_source_integrity",
+                format!(
+                    "external review source {:?} is not referenced by any review",
+                    source.id
+                ),
+            ));
+        }
+    }
+
+    for decision in applicable {
+        let Some(chain) = groups.get_mut(&decision.id) else {
+            violations.push(Violation::for_decision(
+                decision,
+                &profiles,
+                "architectural_decision",
+                "external_review_coverage_missing",
+                "external_review_coverage",
+                "active foundation/SOTA decision has no external-review chain",
+            ));
+            continue;
+        };
+        chain.sort_by(|left, right| {
+            (left.sequence, left.id.as_str()).cmp(&(right.sequence, right.id.as_str()))
+        });
+        let mut previous: Option<&ExternalReview> = None;
+        let mut previous_expected_fingerprint: Option<String> = None;
+        for (index, review) in chain.iter().enumerate() {
+            let expected_sequence = index + 1;
+            if review.sequence != expected_sequence {
+                violations.push(Violation::for_decision(
+                    decision,
+                    &profiles,
+                    "architectural_decision",
+                    "external_review_sequence",
+                    "external_review_linearity",
+                    format!(
+                        "review {:?} has sequence {}, expected contiguous sequence {expected_sequence}",
+                        review.id, review.sequence
+                    ),
+                ));
+            }
+            let expected_predecessor = previous.map_or("", |prior| prior.id.as_str());
+            if review.predecessor != expected_predecessor {
+                violations.push(Violation::for_decision(
+                    decision,
+                    &profiles,
+                    "architectural_decision",
+                    "external_review_predecessor",
+                    "external_review_linearity",
+                    format!(
+                        "review {:?} predecessor {:?} does not equal prior review {:?}",
+                        review.id, review.predecessor, expected_predecessor
+                    ),
+                ));
+            }
+            if previous.is_some_and(|prior| {
+                valid_iso_date(&prior.reviewed_at)
+                    && valid_iso_date(&review.reviewed_at)
+                    && prior.reviewed_at > review.reviewed_at
+            }) {
+                violations.push(Violation::for_decision(
+                    decision,
+                    &profiles,
+                    "architectural_decision",
+                    "external_review_date_order",
+                    "external_review_linearity",
+                    format!(
+                        "review {:?} predates its predecessor {:?}",
+                        review.id, review.predecessor
+                    ),
+                ));
+            }
+            if let Ok(expected) = external_review_record_fingerprint_with_predecessor(
+                review,
+                &sources,
+                previous_expected_fingerprint.as_deref(),
+            ) {
+                if review.record_fingerprint != expected {
+                    violations.push(Violation::for_decision(
+                        decision,
+                        &profiles,
+                        "architectural_decision",
+                        "external_review_record_fingerprint",
+                        "external_review_linearity",
+                        format!(
+                            "review {:?} fingerprint {:?} does not match recomputed {:?}",
+                            review.id, review.record_fingerprint, expected
+                        ),
+                    ));
+                }
+                previous_expected_fingerprint = Some(expected);
+            }
+            previous = Some(review);
+        }
+
+        let tip = chain
+            .last()
+            .expect("external-review coverage rejected empty chains");
+        if let Some(profile) = profiles.get(&decision.profile) {
+            let expected = recompute_external_review_claim_fingerprint(decision, profile);
+            if tip.claim_fingerprint != expected {
+                violations.push(Violation::for_decision(
+                    decision,
+                    &profiles,
+                    "architectural_decision",
+                    "external_review_claim_stale",
+                    "external_review_claim_freshness",
+                    format!(
+                        "review tip {:?} binds claim fingerprint {:?}, current claim recomputes to {:?}",
+                        tip.id, tip.claim_fingerprint, expected
+                    ),
+                ));
+            }
+        }
+        let expected_outcome = match decision.status.as_str() {
+            "frozen" => Some("current"),
+            "review_due" => Some("drift_detected"),
+            _ => None,
+        };
+        if expected_outcome.is_some_and(|expected| tip.outcome != expected) {
+            violations.push(Violation::for_decision(
+                decision,
+                &profiles,
+                "architectural_decision",
+                "external_review_tip_status",
+                "external_review_claim_freshness",
+                format!(
+                    "decision status {:?} requires review tip outcome {:?}, found {:?}",
+                    decision.status,
+                    expected_outcome.unwrap_or_default(),
+                    tip.outcome
+                ),
+            ));
+        }
+    }
+    let history_hash = recompute_external_review_history_hash(registry);
+    if registry.registry.external_review_history_hash != history_hash {
+        violations.push(Violation::global(
+            "external_review_history_hash_mismatch",
+            "external_review_append_only",
+            format!(
+                "registry external-review history hash {:?} does not match recomputed {:?}",
+                registry.registry.external_review_history_hash, history_hash
+            ),
+        ));
+    }
+    if history_hash != PINNED_EXTERNAL_REVIEW_HISTORY_HASH {
+        violations.push(Violation::global(
+            "independent_external_review_history_hash_mismatch",
+            "external_review_append_only",
+            format!(
+                "external-review history hash {history_hash:?} differs from independent code pin {PINNED_EXTERNAL_REVIEW_HISTORY_HASH:?}"
+            ),
+        ));
+    }
+}
+
+/// Validate the per-decision external-review source and append-only chain
+/// contract independently of the whole-registry semantic pin.
+pub fn validate_external_review_contract(registry: &ArchitectureRegistry) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    validate_external_review_contract_into(registry, &mut violations);
+    violations.sort();
+    violations.dedup();
+    violations
+}
+
 fn validate_typed_category_coverage(
     registry: &ArchitectureRegistry,
     catalog: &ReferenceCatalog,
@@ -3863,6 +5480,7 @@ pub fn validate_architecture(registry: &ArchitectureRegistry, root: &Path) -> Ve
     validate_hash_and_ids(registry, &mut violations);
     let profiles = validate_profiles(registry, &mut violations);
     validate_sources(registry, root, &mut violations);
+    validate_external_review_contract_into(registry, &mut violations);
 
     let catalog = match load_reference_catalog(root) {
         Ok(catalog) => Some(catalog),
@@ -3920,6 +5538,13 @@ pub fn validate_architecture(registry: &ArchitectureRegistry, root: &Path) -> Ve
         }
     }
     if let Some(catalog) = &catalog {
+        validate_verification_entrypoint_registry(
+            registry,
+            &profiles,
+            catalog,
+            root,
+            &mut violations,
+        );
         validate_typed_category_coverage(registry, catalog, &mut violations);
     }
     if let Some(beads) = &beads {
