@@ -190,12 +190,24 @@ impl CanonicalScalar {
                 other => Err(ScalarDecodeError::BadBool(other)),
             },
             0x02 => {
-                let raw: [u8; 8] = exact(8)?.try_into().expect("length checked");
-                Ok(CanonicalScalar::Int(i64::from_le_bytes(raw)))
+                let (raw, _) = exact(8)?.split_first_chunk::<8>().ok_or(
+                    ScalarDecodeError::WrongPayloadLength {
+                        tag,
+                        expected: 8,
+                        got: 0,
+                    },
+                )?;
+                Ok(CanonicalScalar::Int(i64::from_le_bytes(*raw)))
             }
             0x03 => {
-                let raw: [u8; 8] = exact(8)?.try_into().expect("length checked");
-                let bits = u64::from_le_bytes(raw);
+                let (raw, _) = exact(8)?.split_first_chunk::<8>().ok_or(
+                    ScalarDecodeError::WrongPayloadLength {
+                        tag,
+                        expected: 8,
+                        got: 0,
+                    },
+                )?;
+                let bits = u64::from_le_bytes(*raw);
                 CanonicalF64::from_bits_canonical(bits)
                     .map(CanonicalScalar::Float)
                     .ok_or(ScalarDecodeError::NonCanonicalFloat { bits })
