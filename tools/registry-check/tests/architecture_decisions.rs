@@ -9,8 +9,7 @@ use registry_check::architecture::{
     PINNED_BEAD_COUNT, PINNED_BET_LABEL_COUNT, PINNED_BIBLIOGRAPHY_COUNT,
     PINNED_BIBLIOGRAPHY_ID_HASH, PINNED_DECISION_COUNT, PINNED_DECISION_ID_HASH,
     PINNED_DIRECT_OWNER_COUNT, PINNED_EXACT_OVERRIDE_COUNT, PINNED_EXTERNAL_REVIEW_DECISION_COUNT,
-    PINNED_EXTERNAL_REVIEW_HISTORY_HASH, PINNED_FAMILY_RULE_COUNT,
-    PINNED_SEMANTIC_CONTRACT_HASH,
+    PINNED_EXTERNAL_REVIEW_HISTORY_HASH, PINNED_FAMILY_RULE_COUNT, PINNED_SEMANTIC_CONTRACT_HASH,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -661,6 +660,20 @@ fn architecture_neg_external_review_chain_gap_and_source_tamper() {
         codes.contains("external_review_record_fingerprint"),
         "{codes:?}"
     );
+
+    let mut malformed_source = real_registry();
+    malformed_source.external_review_sources[0].published_at = "2099-01-01".into();
+    malformed_source.external_review_sources[0].content_digest = "sha256:not-a-digest".into();
+    let codes: BTreeSet<String> =
+        architecture::validate_external_review_contract(&malformed_source)
+            .into_iter()
+            .map(|violation| violation.code)
+            .collect();
+    assert!(
+        codes.contains("external_review_source_date_order"),
+        "{codes:?}"
+    );
+    assert!(codes.contains("external_review_source_digest"), "{codes:?}");
 }
 
 #[test]

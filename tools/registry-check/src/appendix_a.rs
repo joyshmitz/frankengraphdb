@@ -2068,7 +2068,10 @@ fn verify_structural_target_source_keys(
         .chain(census.arms.iter().map(|row| row.key.source_key()))
         .collect();
     for target in &catalog.targets {
-        if target.slice_id == "g0" || target.source_key.starts_with("reference|") {
+        if target.slice_id == "g0"
+            || target.source_key.starts_with("reference|")
+            || target.source_key.starts_with("projection|")
+        {
             continue;
         }
         if !source_keys.contains(&target.source_key) {
@@ -3959,6 +3962,7 @@ fn validate_catalog_metadata(catalog: &Catalog, out: &mut Vec<Violation>) {
             && !row.source_key.starts_with("field|")
             && !row.source_key.starts_with("union|")
             && !row.source_key.starts_with("arm|")
+            && !row.source_key.starts_with("projection|")
             && !candidate_by_key.contains_key(row.source_key.as_str())
             && declared_reference_symbol.is_none()
         {
@@ -4464,18 +4468,26 @@ fn validate_target_source_identity(
     top_candidate: Option<&TopLevelCandidate>,
     out: &mut Vec<Violation>,
 ) {
-    if row.slice_id == "g0" {
-        let expected = format!(
-            "projection|{}|{}",
-            projection.projection, projection.canonical_symbol
-        );
-        if row.source_key != expected {
+    let projection_source_key = format!(
+        "projection|{}|{}",
+        projection.projection, projection.canonical_symbol
+    );
+    if row.source_key == projection_source_key {
+        if row.definition_status != "declared" {
             out.push(Violation::new(
-                "catalog_target_source_identity_mismatch",
+                "catalog_target_projection_incomplete",
                 &row.row_id,
-                format!("g0 source_key must be {expected:?}"),
+                "a projection-only source cannot back a complete target",
             ));
         }
+        return;
+    }
+    if row.slice_id == "g0" {
+        out.push(Violation::new(
+            "catalog_target_source_identity_mismatch",
+            &row.row_id,
+            format!("g0 source_key must be {projection_source_key:?}"),
+        ));
         return;
     }
 

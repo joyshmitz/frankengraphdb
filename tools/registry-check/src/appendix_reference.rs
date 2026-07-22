@@ -107,8 +107,8 @@ pub fn census_plan_references(source: &[u8]) -> Result<ReferenceCensus, Referenc
         for (alternative_start, alternative_end) in
             top_level_alternatives(text, open + 1, close, &source_map)?
         {
-            let trimmed_start = first_non_whitespace(bytes, alternative_start, alternative_end);
-            let trimmed_end = last_non_whitespace(bytes, trimmed_start, alternative_end);
+            let trimmed_start = first_non_whitespace(text, alternative_start, alternative_end);
+            let trimmed_end = last_non_whitespace(text, trimmed_start, alternative_end);
             if trimmed_start == trimmed_end {
                 let (line, column) = source_map.line_column(text, alternative_start);
                 return Err(ReferenceCensusError {
@@ -315,16 +315,21 @@ fn nesting_error(text: &str, source_map: &SourceMap, offset: usize) -> Reference
     }
 }
 
-fn first_non_whitespace(bytes: &[u8], start: usize, end: usize) -> usize {
-    (start..end)
-        .find(|index| !bytes[*index].is_ascii_whitespace())
+fn first_non_whitespace(text: &str, start: usize, end: usize) -> usize {
+    text[start..end]
+        .char_indices()
+        .find_map(|(offset, character)| (!character.is_whitespace()).then_some(start + offset))
         .unwrap_or(end)
 }
 
-fn last_non_whitespace(bytes: &[u8], start: usize, end: usize) -> usize {
-    (start..end)
-        .rfind(|index| !bytes[*index].is_ascii_whitespace())
-        .map_or(start, |index| index + 1)
+fn last_non_whitespace(text: &str, start: usize, end: usize) -> usize {
+    text[start..end]
+        .char_indices()
+        .rev()
+        .find_map(|(offset, character)| {
+            (!character.is_whitespace()).then_some(start + offset + character.len_utf8())
+        })
+        .unwrap_or(start)
 }
 
 fn normalize_whitespace(value: &str) -> String {
@@ -485,6 +490,18 @@ mod tests {
             .collect();
         assert_eq!(families, ["Envelope", "Inner", "Leaf"]);
         assert_eq!(census.occurrence_count, 3);
+    }
+
+    #[test]
+    fn unicode_target_whitespace_is_trimmed_before_coordinates() {
+        let census = census_plan_references("StrongRef<\u{00a0}Alpha\u{00a0}>".as_bytes())
+            .expect("Unicode target whitespace is accepted");
+        assert_eq!(census.occurrences[0].target_expression, "Alpha");
+        assert_eq!(census.occurrences[0].column, 12);
+
+        let empty = census_plan_references("StrongRef<\u{00a0}>".as_bytes())
+            .expect_err("Unicode-whitespace-only target is empty");
+        assert_eq!(empty.code, "reference_target_empty");
     }
 
     #[test]
