@@ -1,0 +1,12 @@
+[package]
+name = "fgdb-delta-types"
+version = "0.0.1"
+edition = "2024"
+description = "The G0/W2 logical delta schema: exact typed delta rows, the sequence-neutral LogicalDeltaTemplate, and the type-level law that only a committed MarkerRef orders a LogicalDeltaBatch (Appendix B ~plan:2807; bead fgdb-w1-foundation-types-tjk)."
+publish = false
+
+[dependencies.fgdb-types]
+path = "../fgdb-types"
+
+[lints]
+workspace = true

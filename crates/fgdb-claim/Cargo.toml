@@ -1,0 +1,9 @@
+[package]
+name = "fgdb-claim"
+version = "0.0.1"
+edition = "2024"
+description = "The claim-type constitution as a Rust type system: the six registry claim classes, the lattice law (a weaker class never justifies a stronger one) as a compile error, the registry routing law, and the section-15.0 evidence claim vocabulary (bead fgdb-w1-foundation-types-tjk)."
+publish = false
+
+[lints]
+workspace = true

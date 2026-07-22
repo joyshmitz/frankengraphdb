@@ -7,6 +7,17 @@ name = "fgdb-bigint"
 version = "0.0.1"
 
 [[package]]
+name = "fgdb-claim"
+version = "0.0.1"
+
+[[package]]
+name = "fgdb-delta-types"
+version = "0.0.1"
+dependencies = [
+ "fgdb-types",
+]
+
+[[package]]
 name = "fgdb-types"
 version = "0.0.1"
 
