@@ -223,7 +223,7 @@ fn architecture_bead_provenance_is_total_pinned_and_bidirectional() {
         for owner in &decision.owner_beads {
             let entry = entries
                 .get(owner.as_str())
-                .unwrap_or_else(|| panic!("explicit owner {owner} has no provenance row"));
+                .expect("explicit owner must have a provenance row");
             assert!(
                 entry.decision_ids.contains(&decision.id),
                 "explicit edge {owner} -> {} is absent from reverse provenance",
