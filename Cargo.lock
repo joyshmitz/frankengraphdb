@@ -14,6 +14,10 @@ version = "0.0.1"
 name = "fgdb-delta-types"
 version = "0.0.1"
 dependencies = [
+ "fgdb-bigint",
+ "fgdb-claim",
+ "fgdb-evidence",
+ "fgdb-resource",
  "fgdb-types",
 ]
 
