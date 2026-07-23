@@ -98,7 +98,8 @@ pub enum SizeCalculation {
 pub enum RoaringError {
     /// The logical input or result is larger than the caller permits.
     EntryLimitExceeded {
-        /// Number of logical values.
+        /// Exact input size, or the first result-size witness above `limit`
+        /// when an intersection terminates early.
         entries: usize,
         /// Caller-provided ceiling.
         limit: usize,
@@ -141,7 +142,7 @@ impl fmt::Display for RoaringError {
             Self::EntryLimitExceeded { entries, limit } => {
                 write!(
                     formatter,
-                    "roaring input has {entries} entries, limit is {limit}"
+                    "roaring operation reached {entries} entries, limit is {limit}"
                 )
             }
             Self::Duplicate { index, value } => {
@@ -477,16 +478,12 @@ impl RoaringBitmap {
     /// Computes a canonical set intersection under an explicit result bound.
     ///
     /// A first allocation-free pass computes the exact result cardinality and
-    /// non-empty chunk count. The second pass allocates only output chunks and
-    /// at most one matching chunk's low values at a time.
+    /// non-empty chunk count, stopping as soon as the result is known to exceed
+    /// `limit`. Compressed run and bitmap containers are counted without
+    /// expanding them value by value. The second pass allocates only output
+    /// chunks and at most one matching chunk's low values at a time.
     pub fn intersection(&self, other: &Self, limit: EntryLimit) -> Result<Self, RoaringError> {
-        let (result_len, result_chunks) = intersection_shape(self, other)?;
-        if result_len > limit.max_entries() {
-            return Err(RoaringError::EntryLimitExceeded {
-                entries: result_len,
-                limit: limit.max_entries(),
-            });
-        }
+        let (result_len, result_chunks) = intersection_shape(self, other, limit)?;
         if result_len == 0 {
             return Ok(Self {
                 chunks: Vec::new(),
@@ -938,6 +935,7 @@ fn set_bit(words: &mut [u64], low: u16) {
 fn intersection_shape(
     left: &RoaringBitmap,
     right: &RoaringBitmap,
+    limit: EntryLimit,
 ) -> Result<(usize, usize), RoaringError> {
     let mut left_index = 0_usize;
     let mut right_index = 0_usize;
@@ -950,8 +948,18 @@ fn intersection_shape(
             core::cmp::Ordering::Less => left_index += 1,
             core::cmp::Ordering::Greater => right_index += 1,
             core::cmp::Ordering::Equal => {
-                let chunk_cardinality =
-                    intersection_cardinality(&left_chunk.container, &right_chunk.container)?;
+                let remaining = limit.max_entries().saturating_sub(cardinality);
+                let Some(chunk_cardinality) = intersection_cardinality_bounded(
+                    &left_chunk.container,
+                    &right_chunk.container,
+                    remaining,
+                )?
+                else {
+                    return Err(RoaringError::EntryLimitExceeded {
+                        entries: limit.max_entries().saturating_add(1),
+                        limit: limit.max_entries(),
+                    });
+                };
                 if chunk_cardinality != 0 {
                     cardinality = cardinality.checked_add(chunk_cardinality).ok_or(
                         RoaringError::SizeOverflow {
@@ -971,27 +979,185 @@ fn intersection_shape(
 }
 
 fn intersection_cardinality(left: &Container, right: &Container) -> Result<usize, RoaringError> {
-    let mut left_values = left.iter().peekable();
-    let mut right_values = right.iter().peekable();
+    intersection_cardinality_bounded(left, right, usize::MAX)?.ok_or(RoaringError::SizeOverflow {
+        calculation: SizeCalculation::IntersectionCardinality,
+    })
+}
+
+/// Counts a container intersection up to `limit` without expanding compressed
+/// runs or bitmap words into individual values.
+///
+/// `None` is a proof that the cardinality is at least `limit + 1`; callers do
+/// not need to scan the remainder merely to report an exact rejected size.
+fn intersection_cardinality_bounded(
+    left: &Container,
+    right: &Container,
+    limit: usize,
+) -> Result<Option<usize>, RoaringError> {
+    match (left, right) {
+        (Container::Array(left_values), Container::Array(right_values)) => {
+            count_array_array(left_values, right_values, limit)
+        }
+        (Container::Array(values), Container::Bitmap(words))
+        | (Container::Bitmap(words), Container::Array(values)) => {
+            count_array_bitmap(values, words, limit)
+        }
+        (Container::Array(values), Container::Run(runs))
+        | (Container::Run(runs), Container::Array(values)) => count_array_runs(values, runs, limit),
+        (Container::Bitmap(left_words), Container::Bitmap(right_words)) => {
+            count_bitmap_bitmap(left_words, right_words, limit)
+        }
+        (Container::Bitmap(words), Container::Run(runs))
+        | (Container::Run(runs), Container::Bitmap(words)) => count_bitmap_runs(words, runs, limit),
+        (Container::Run(left_runs), Container::Run(right_runs)) => {
+            count_run_run(left_runs, right_runs, limit)
+        }
+    }
+}
+
+fn count_array_array(
+    left: &[u16],
+    right: &[u16],
+    limit: usize,
+) -> Result<Option<usize>, RoaringError> {
+    let mut left_index = 0_usize;
+    let mut right_index = 0_usize;
     let mut count = 0_usize;
-    while let (Some(&left_value), Some(&right_value)) = (left_values.peek(), right_values.peek()) {
-        match left_value.cmp(&right_value) {
-            core::cmp::Ordering::Less => {
-                left_values.next();
-            }
-            core::cmp::Ordering::Greater => {
-                right_values.next();
-            }
+    while left_index < left.len() && right_index < right.len() {
+        match left[left_index].cmp(&right[right_index]) {
+            core::cmp::Ordering::Less => left_index += 1,
+            core::cmp::Ordering::Greater => right_index += 1,
             core::cmp::Ordering::Equal => {
-                count = count.checked_add(1).ok_or(RoaringError::SizeOverflow {
-                    calculation: SizeCalculation::IntersectionCardinality,
-                })?;
-                left_values.next();
-                right_values.next();
+                if !add_bounded(&mut count, 1, limit)? {
+                    return Ok(None);
+                }
+                left_index += 1;
+                right_index += 1;
             }
         }
     }
-    Ok(count)
+    Ok(Some(count))
+}
+
+fn count_array_bitmap(
+    values: &[u16],
+    words: &[u64],
+    limit: usize,
+) -> Result<Option<usize>, RoaringError> {
+    let mut count = 0_usize;
+    for &value in values {
+        let index = usize::from(value);
+        if words[index / u64::BITS as usize] & (1_u64 << (index % u64::BITS as usize)) != 0
+            && !add_bounded(&mut count, 1, limit)?
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(count))
+}
+
+fn count_array_runs(
+    values: &[u16],
+    runs: &[Run],
+    limit: usize,
+) -> Result<Option<usize>, RoaringError> {
+    let mut count = 0_usize;
+    let mut run_index = 0_usize;
+    for &value in values {
+        while run_index < runs.len() && runs[run_index].end < value {
+            run_index += 1;
+        }
+        if run_index == runs.len() {
+            break;
+        }
+        if runs[run_index].start <= value && !add_bounded(&mut count, 1, limit)? {
+            return Ok(None);
+        }
+    }
+    Ok(Some(count))
+}
+
+fn count_bitmap_bitmap(
+    left: &[u64],
+    right: &[u64],
+    limit: usize,
+) -> Result<Option<usize>, RoaringError> {
+    let mut count = 0_usize;
+    for (&left_word, &right_word) in left.iter().zip(right) {
+        let matches = (left_word & right_word).count_ones() as usize;
+        if !add_bounded(&mut count, matches, limit)? {
+            return Ok(None);
+        }
+    }
+    Ok(Some(count))
+}
+
+fn count_bitmap_runs(
+    words: &[u64],
+    runs: &[Run],
+    limit: usize,
+) -> Result<Option<usize>, RoaringError> {
+    let mut count = 0_usize;
+    for run in runs {
+        let start = usize::from(run.start);
+        let end = usize::from(run.end);
+        let first_word = start / u64::BITS as usize;
+        let last_word = end / u64::BITS as usize;
+        for (word_index, &word) in words[first_word..=last_word].iter().enumerate() {
+            let absolute_word_index = first_word + word_index;
+            let word_start = absolute_word_index * u64::BITS as usize;
+            let from = start.saturating_sub(word_start).min(u64::BITS as usize);
+            let through = end.saturating_sub(word_start).min(u64::BITS as usize - 1);
+            let lower_mask = u64::MAX << from;
+            let upper_mask = if through == u64::BITS as usize - 1 {
+                u64::MAX
+            } else {
+                (1_u64 << (through + 1)) - 1
+            };
+            let matches = (word & lower_mask & upper_mask).count_ones() as usize;
+            if !add_bounded(&mut count, matches, limit)? {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(count))
+}
+
+fn count_run_run(left: &[Run], right: &[Run], limit: usize) -> Result<Option<usize>, RoaringError> {
+    let mut left_index = 0_usize;
+    let mut right_index = 0_usize;
+    let mut count = 0_usize;
+    while left_index < left.len() && right_index < right.len() {
+        let left_run = left[left_index];
+        let right_run = right[right_index];
+        let overlap_start = left_run.start.max(right_run.start);
+        let overlap_end = left_run.end.min(right_run.end);
+        if overlap_start <= overlap_end {
+            let overlap = usize::from(overlap_end) - usize::from(overlap_start) + 1;
+            if !add_bounded(&mut count, overlap, limit)? {
+                return Ok(None);
+            }
+        }
+        if left_run.end <= right_run.end {
+            left_index += 1;
+        }
+        if right_run.end <= left_run.end {
+            right_index += 1;
+        }
+    }
+    Ok(Some(count))
+}
+
+fn add_bounded(count: &mut usize, amount: usize, limit: usize) -> Result<bool, RoaringError> {
+    if amount > limit.saturating_sub(*count) {
+        return Ok(false);
+    }
+    *count = count
+        .checked_add(amount)
+        .ok_or(RoaringError::SizeOverflow {
+            calculation: SizeCalculation::IntersectionCardinality,
+        })?;
+    Ok(true)
 }
 
 fn write_intersection(left: &Container, right: &Container, output: &mut Vec<u16>) {
@@ -1398,6 +1564,52 @@ mod tests {
                 entries: 100,
                 limit: 99,
             })
+        );
+    }
+
+    #[test]
+    fn compressed_intersection_limit_returns_first_overage_witness() {
+        let run = build(&(0_u32..=u32::from(u16::MAX)).collect::<Vec<_>>());
+        let bitmap = build(&(0_u32..4097).map(|value| value * 2).collect::<Vec<_>>());
+        let array = build(&[0, 2, 4]);
+
+        assert_eq!(run.container_kind(0), Some(ContainerKind::Run));
+        assert_eq!(bitmap.container_kind(0), Some(ContainerKind::Bitmap));
+        assert_eq!(array.container_kind(0), Some(ContainerKind::Array));
+
+        for (left, right) in [
+            (&run, &run),
+            (&bitmap, &bitmap),
+            (&bitmap, &run),
+            (&run, &bitmap),
+            (&array, &bitmap),
+            (&bitmap, &array),
+            (&array, &run),
+            (&run, &array),
+        ] {
+            assert_eq!(
+                left.intersection(right, EntryLimit::new(0)),
+                Err(RoaringError::EntryLimitExceeded {
+                    entries: 1,
+                    limit: 0,
+                }),
+                "{:?} intersect {:?}",
+                left.container_kind(0),
+                right.container_kind(0)
+            );
+        }
+
+        assert_eq!(
+            intersection_cardinality(&run.chunks[0].container, &run.chunks[0].container),
+            Ok(1_usize << LOW_BITS)
+        );
+        assert_eq!(
+            intersection_cardinality(&bitmap.chunks[0].container, &bitmap.chunks[0].container),
+            Ok(4097)
+        );
+        assert_eq!(
+            intersection_cardinality(&bitmap.chunks[0].container, &run.chunks[0].container),
+            Ok(4097)
         );
     }
 }

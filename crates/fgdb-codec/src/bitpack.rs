@@ -13,13 +13,14 @@ use core::fmt;
 /// Largest supported fixed bit width for `u64` values.
 pub const MAX_BIT_WIDTH: u8 = 64;
 
-/// Hard ceiling on values materialized by one scalar decode call.
+/// Hard ceiling on values accepted by one scalar encode or decode call.
 ///
-/// Larger logical sequences must be framed and decoded in bounded chunks. The
-/// ceiling is independent of encoded byte length so a zero-width payload cannot
-/// authorize an unbounded allocation. This is only the scalar kernel's final
-/// 128 MiB materialization ceiling; registered durable callers must enforce
-/// their tighter per-kind maximum and active resource budget before calling.
+/// Larger logical sequences must be framed, encoded, and decoded in bounded
+/// chunks. The ceiling is independent of encoded byte length so a zero-width
+/// payload cannot authorize an unbounded allocation. This is only the scalar
+/// kernel's final 128 MiB materialization ceiling; registered durable callers
+/// must enforce their tighter per-kind maximum and active resource budget before
+/// calling.
 pub const MAX_DECODED_VALUES: usize = 1 << 24;
 
 /// Allocation whose reservation failed during codec operation.
@@ -48,7 +49,7 @@ pub enum BitpackError {
         /// Bits allocated to each value.
         width: u8,
     },
-    /// One decode requested more materialized values than the hard ceiling.
+    /// One operation requested more logical values than the hard ceiling.
     ValueCountLimitExceeded {
         /// Requested logical value count.
         count: usize,
@@ -133,7 +134,7 @@ impl fmt::Display for BitpackError {
             ),
             Self::ValueCountLimitExceeded { count, limit } => write!(
                 formatter,
-                "packed decode count {count} exceeds the hard limit {limit}"
+                "packed value count {count} exceeds the hard limit {limit}"
             ),
             Self::TruncatedInput { expected, actual } => write!(
                 formatter,
@@ -207,7 +208,7 @@ pub fn expected_byte_len(count: usize, width: u8) -> Result<usize, BitpackError>
 
 /// Encodes fixed-width values into a newly allocated canonical byte vector.
 pub fn encode(values: &[u64], width: u8) -> Result<Vec<u8>, BitpackError> {
-    let expected = expected_byte_len(values.len(), width)?;
+    let expected = bounded_expected_byte_len(values.len(), width)?;
     validate_values(values, width)?;
 
     let mut output = Vec::new();
@@ -227,7 +228,7 @@ pub fn encode(values: &[u64], width: u8) -> Result<Vec<u8>, BitpackError> {
 /// Values and capacity are checked before `output` is changed. Bytes after the
 /// returned count are left untouched.
 pub fn encode_into(values: &[u64], width: u8, output: &mut [u8]) -> Result<usize, BitpackError> {
-    let expected = expected_byte_len(values.len(), width)?;
+    let expected = bounded_expected_byte_len(values.len(), width)?;
     validate_values(values, width)?;
     if output.len() < expected {
         return Err(BitpackError::OutputTooSmall {
@@ -245,13 +246,7 @@ pub fn encode_into(values: &[u64], width: u8, output: &mut [u8]) -> Result<usize
 ///
 /// Exact length and canonical padding are validated before result allocation.
 pub fn decode(input: &[u8], count: usize, width: u8) -> Result<Vec<u64>, BitpackError> {
-    if count > MAX_DECODED_VALUES {
-        return Err(BitpackError::ValueCountLimitExceeded {
-            count,
-            limit: MAX_DECODED_VALUES,
-        });
-    }
-    let expected = expected_byte_len(count, width)?;
+    let expected = bounded_expected_byte_len(count, width)?;
     validate_input(input, count, width, expected)?;
 
     let mut values = Vec::new();
@@ -296,9 +291,11 @@ pub fn decode(input: &[u8], count: usize, width: u8) -> Result<Vec<u64>, Bitpack
 /// canonical base/width selector. The registered enclosing format or codec
 /// profile owns that choice and records it in its frame.
 pub fn encode_for(values: &[u64], base: u64, width: u8) -> Result<Vec<u8>, BitpackError> {
-    // Establish width and byte-length validity before allocating temporary
-    // deltas. `encode` repeats this inexpensive check at the trust boundary.
-    let _ = expected_byte_len(values.len(), width)?;
+    // Establish the value-count, width, exact byte length, and every source
+    // delta before allocating temporary storage. `encode` repeats the bounded
+    // request and width checks at the final packing boundary.
+    let _ = bounded_expected_byte_len(values.len(), width)?;
+    validate_for_values(values, base, width)?;
 
     let mut deltas = Vec::new();
     deltas
@@ -340,6 +337,21 @@ fn validate_width(width: u8) -> Result<(), BitpackError> {
     Ok(())
 }
 
+fn validate_value_count(count: usize) -> Result<(), BitpackError> {
+    if count > MAX_DECODED_VALUES {
+        return Err(BitpackError::ValueCountLimitExceeded {
+            count,
+            limit: MAX_DECODED_VALUES,
+        });
+    }
+    Ok(())
+}
+
+fn bounded_expected_byte_len(count: usize, width: u8) -> Result<usize, BitpackError> {
+    validate_value_count(count)?;
+    expected_byte_len(count, width)
+}
+
 fn validate_values(values: &[u64], width: u8) -> Result<(), BitpackError> {
     debug_assert!(width <= MAX_BIT_WIDTH);
     if width == MAX_BIT_WIDTH {
@@ -352,6 +364,25 @@ fn validate_values(values: &[u64], width: u8) -> Result<(), BitpackError> {
             return Err(BitpackError::ValueOutOfRange {
                 index,
                 value,
+                width,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_for_values(values: &[u64], base: u64, width: u8) -> Result<(), BitpackError> {
+    debug_assert!(width <= MAX_BIT_WIDTH);
+    let exclusive_limit = (width != MAX_BIT_WIDTH).then(|| 1_u64 << width);
+
+    for (index, &value) in values.iter().enumerate() {
+        let delta = value
+            .checked_sub(base)
+            .ok_or(BitpackError::ValueBelowBase { index, value, base })?;
+        if exclusive_limit.is_some_and(|limit| delta >= limit) {
+            return Err(BitpackError::ValueOutOfRange {
+                index,
+                value: delta,
                 width,
             });
         }
@@ -506,6 +537,32 @@ mod tests {
     }
 
     #[test]
+    fn scalar_operation_count_ceiling_is_symmetric_and_precedes_width_work() {
+        assert_eq!(validate_value_count(MAX_DECODED_VALUES), Ok(()));
+        let expected = BitpackError::ValueCountLimitExceeded {
+            count: MAX_DECODED_VALUES + 1,
+            limit: MAX_DECODED_VALUES,
+        };
+        assert_eq!(
+            bounded_expected_byte_len(MAX_DECODED_VALUES + 1, 0),
+            Err(expected)
+        );
+        assert_eq!(
+            bounded_expected_byte_len(MAX_DECODED_VALUES + 1, MAX_BIT_WIDTH + 1),
+            Err(expected)
+        );
+
+        // The zero-filled fixture may be virtually backed, and every operation
+        // must reject from its length before reading it or reserving output.
+        let values = vec![0_u64; MAX_DECODED_VALUES + 1];
+        assert_eq!(encode(&values, 0), Err(expected));
+        let mut output = [0xa5_u8];
+        assert_eq!(encode_into(&values, 0, &mut output), Err(expected));
+        assert_eq!(output, [0xa5]);
+        assert_eq!(encode_for(&values, 0, 0), Err(expected));
+    }
+
+    #[test]
     fn decoder_rejects_lengths_and_noncanonical_padding_before_decode() {
         assert_eq!(
             decode(&[], 1, 1),
@@ -583,6 +640,22 @@ mod tests {
                 index: 0,
                 value: 9,
                 base: 10,
+            })
+        );
+        assert_eq!(
+            encode_for(&[10, 11, 9], 10, 4),
+            Err(BitpackError::ValueBelowBase {
+                index: 2,
+                value: 9,
+                base: 10,
+            })
+        );
+        assert_eq!(
+            encode_for(&[10, 11, 26], 10, 4),
+            Err(BitpackError::ValueOutOfRange {
+                index: 2,
+                value: 16,
+                width: 4,
             })
         );
         assert_eq!(
