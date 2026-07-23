@@ -30,8 +30,6 @@ pub enum AllocationTarget {
     EncodedBytes,
     /// Decoded `u64` values.
     DecodedValues,
-    /// Temporary frame-of-reference deltas.
-    FrameOfReferenceDeltas,
 }
 
 /// Checked bitpacking or frame-of-reference failure.
@@ -291,26 +289,7 @@ pub fn decode(input: &[u8], count: usize, width: u8) -> Result<Vec<u64>, Bitpack
 /// canonical base/width selector. The registered enclosing format or codec
 /// profile owns that choice and records it in its frame.
 pub fn encode_for(values: &[u64], base: u64, width: u8) -> Result<Vec<u8>, BitpackError> {
-    // Establish the value-count, width, exact byte length, and every source
-    // delta before allocating temporary storage. `encode` repeats the bounded
-    // request and width checks at the final packing boundary.
-    let _ = bounded_expected_byte_len(values.len(), width)?;
-    validate_for_values(values, base, width)?;
-
-    let mut deltas = Vec::new();
-    deltas
-        .try_reserve_exact(values.len())
-        .map_err(|_| BitpackError::AllocationFailed {
-            target: AllocationTarget::FrameOfReferenceDeltas,
-            requested: values.len(),
-        })?;
-    for (index, &value) in values.iter().enumerate() {
-        let delta = value
-            .checked_sub(base)
-            .ok_or(BitpackError::ValueBelowBase { index, value, base })?;
-        deltas.push(delta);
-    }
-    encode(&deltas, width)
+    encode_for_with_output_reservation(values, base, width, reserve_encoded_output)
 }
 
 /// Decodes exactly `count` FOR deltas and checked-adds `base` to each one.
@@ -390,6 +369,39 @@ fn validate_for_values(values: &[u64], base: u64, width: u8) -> Result<(), Bitpa
     Ok(())
 }
 
+fn reserve_encoded_output(expected: usize) -> Result<Vec<u8>, BitpackError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(expected)
+        .map_err(|_| BitpackError::AllocationFailed {
+            target: AllocationTarget::EncodedBytes,
+            requested: expected,
+        })?;
+    Ok(output)
+}
+
+fn encode_for_with_output_reservation<Reserve>(
+    values: &[u64],
+    base: u64,
+    width: u8,
+    reserve_output: Reserve,
+) -> Result<Vec<u8>, BitpackError>
+where
+    Reserve: FnOnce(usize) -> Result<Vec<u8>, BitpackError>,
+{
+    // Pass one fixes error precedence and proves every subtraction and
+    // selected-width constraint before the sole output reservation.
+    let expected = bounded_expected_byte_len(values.len(), width)?;
+    validate_for_values(values, base, width)?;
+
+    // Pass two subtracts and packs directly into the exact bounded output.
+    // No `values.len()`-sized delta staging allocation is materialized.
+    let mut output = reserve_output(expected)?;
+    output.resize(expected, 0);
+    pack_for_validated(values, base, width, &mut output)?;
+    Ok(output)
+}
+
 fn validate_input(
     input: &[u8],
     count: usize,
@@ -434,25 +446,53 @@ fn pack_validated(values: &[u64], width: u8, output: &mut [u8]) -> Result<(), Bi
         return Ok(());
     }
 
-    let width_usize = usize::from(width);
     let mut bit_cursor = 0_usize;
     for &value in values {
-        let mut value_bit = 0_usize;
-        while value_bit < width_usize {
-            let byte_index = bit_cursor / 8;
-            let bit_in_byte = bit_cursor % 8;
-            let take = (8 - bit_in_byte).min(width_usize - value_bit);
-            let mask = low_mask(take);
-            let chunk = ((value >> value_bit) as u8) & mask;
-            output[byte_index] |= chunk << bit_in_byte;
-            value_bit += take;
-            bit_cursor = bit_cursor
-                .checked_add(take)
-                .ok_or(BitpackError::ByteLengthOverflow {
-                    count: values.len(),
-                    width,
-                })?;
-        }
+        pack_value(value, values.len(), width, output, &mut bit_cursor)?;
+    }
+    Ok(())
+}
+
+fn pack_for_validated(
+    values: &[u64],
+    base: u64,
+    width: u8,
+    output: &mut [u8],
+) -> Result<(), BitpackError> {
+    if width == 0 {
+        return Ok(());
+    }
+
+    let mut bit_cursor = 0_usize;
+    for (index, &value) in values.iter().enumerate() {
+        let delta = value
+            .checked_sub(base)
+            .ok_or(BitpackError::ValueBelowBase { index, value, base })?;
+        pack_value(delta, values.len(), width, output, &mut bit_cursor)?;
+    }
+    Ok(())
+}
+
+fn pack_value(
+    value: u64,
+    count: usize,
+    width: u8,
+    output: &mut [u8],
+    bit_cursor: &mut usize,
+) -> Result<(), BitpackError> {
+    let width_usize = usize::from(width);
+    let mut value_bit = 0_usize;
+    while value_bit < width_usize {
+        let byte_index = *bit_cursor / 8;
+        let bit_in_byte = *bit_cursor % 8;
+        let take = (8 - bit_in_byte).min(width_usize - value_bit);
+        let mask = low_mask(take);
+        let chunk = ((value >> value_bit) as u8) & mask;
+        output[byte_index] |= chunk << bit_in_byte;
+        value_bit += take;
+        *bit_cursor = bit_cursor
+            .checked_add(take)
+            .ok_or(BitpackError::ByteLengthOverflow { count, width })?;
     }
     Ok(())
 }
@@ -464,6 +504,8 @@ fn low_mask(bits: usize) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use core::cell::Cell;
+
     use super::*;
 
     #[test]
@@ -560,6 +602,11 @@ mod tests {
         assert_eq!(encode_into(&values, 0, &mut output), Err(expected));
         assert_eq!(output, [0xa5]);
         assert_eq!(encode_for(&values, 0, 0), Err(expected));
+        assert_eq!(
+            encode_for(&values, 0, MAX_BIT_WIDTH + 1),
+            Err(expected),
+            "count ceiling must precede invalid-width work"
+        );
     }
 
     #[test]
@@ -667,6 +714,123 @@ mod tests {
             })
         );
         assert_eq!(decode_for(&[0], 1, u64::MAX, 1), Ok(vec![u64::MAX]));
+    }
+
+    #[test]
+    fn direct_for_encoder_reserves_only_the_exact_output_after_preflight() {
+        let values: Vec<u64> = (0_u64..4_097).map(|index| 10_000 + (index & 31)).collect();
+        let reservation_calls = Cell::new(0_usize);
+        let requested_bytes = Cell::new(None);
+
+        let encoded = encode_for_with_output_reservation(&values, 10_000, 5, |expected| {
+            reservation_calls.set(reservation_calls.get() + 1);
+            requested_bytes.set(Some(expected));
+            reserve_encoded_output(expected)
+        })
+        .expect("valid FOR input must encode");
+
+        let expected = expected_byte_len(values.len(), 5).expect("bounded fixture length");
+        assert_eq!(reservation_calls.get(), 1);
+        assert_eq!(requested_bytes.get(), Some(expected));
+        assert_eq!(encoded.len(), expected);
+
+        // Invalid input is rejected by the allocation-free first pass, so the
+        // output reservation seam is never reached.
+        reservation_calls.set(0);
+        let invalid = [10_000, 9_999, 10_001];
+        assert_eq!(
+            encode_for_with_output_reservation(&invalid, 10_000, 5, |expected| {
+                reservation_calls.set(reservation_calls.get() + 1);
+                reserve_encoded_output(expected)
+            }),
+            Err(BitpackError::ValueBelowBase {
+                index: 1,
+                value: 9_999,
+                base: 10_000,
+            })
+        );
+        assert_eq!(reservation_calls.get(), 0);
+
+        // The single fallible allocation remains named as encoded output; no
+        // per-entry FOR-delta allocation participates in the error surface.
+        assert_eq!(
+            encode_for_with_output_reservation(&values, 10_000, 5, |expected| {
+                Err(BitpackError::AllocationFailed {
+                    target: AllocationTarget::EncodedBytes,
+                    requested: expected,
+                })
+            }),
+            Err(BitpackError::AllocationFailed {
+                target: AllocationTarget::EncodedBytes,
+                requested: expected,
+            })
+        );
+    }
+
+    #[test]
+    fn direct_for_encoder_is_bit_identical_to_materialized_delta_oracle() {
+        let counts = [0_usize, 1, 2, 3, 7, 8, 9, 15, 16, 31, 33, 64, 127];
+        let mut state = 0xa409_3822_299f_31d0_u64;
+
+        for width in 0..=MAX_BIT_WIDTH {
+            let mask = if width == MAX_BIT_WIDTH {
+                u64::MAX
+            } else if width == 0 {
+                0
+            } else {
+                (1_u64 << width) - 1
+            };
+            let base = if width <= 52 { 1_000_u64 } else { 0_u64 };
+
+            for count in counts {
+                let mut values = Vec::with_capacity(count);
+                for _ in 0..count {
+                    state = state
+                        .wrapping_mul(2_862_933_555_777_941_757)
+                        .wrapping_add(3_037_000_493);
+                    let delta = state & mask;
+                    values.push(
+                        base.checked_add(delta)
+                            .expect("fixture base and masked delta cannot overflow"),
+                    );
+                }
+
+                let mut materialized_deltas = Vec::with_capacity(values.len());
+                materialized_deltas.extend(values.iter().map(|value| value - base));
+                let oracle =
+                    encode(&materialized_deltas, width).expect("oracle deltas fit selected width");
+                let direct =
+                    encode_for(&values, base, width).expect("valid FOR fixture must encode");
+
+                assert_eq!(direct, oracle, "width={width}, count={count}");
+            }
+        }
+    }
+
+    #[test]
+    fn direct_for_error_precedence_remains_deterministic() {
+        assert_eq!(
+            encode_for(&[0], 0, MAX_BIT_WIDTH + 1),
+            Err(BitpackError::InvalidWidth {
+                width: MAX_BIT_WIDTH + 1,
+            })
+        );
+        assert_eq!(
+            encode_for(&[11, 9, 26], 10, 4),
+            Err(BitpackError::ValueBelowBase {
+                index: 1,
+                value: 9,
+                base: 10,
+            })
+        );
+        assert_eq!(
+            encode_for(&[11, 26, 9], 10, 4),
+            Err(BitpackError::ValueOutOfRange {
+                index: 1,
+                value: 16,
+                width: 4,
+            })
+        );
     }
 
     #[test]

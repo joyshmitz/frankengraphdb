@@ -35,10 +35,11 @@
 //! profile therefore produce byte-identical output.
 //!
 //! Scalar compression and decompression are linear in block length because a
-//! match comparison is capped at 131 bytes. Compression requests
-//! `O(hash_table_entries + encoded_bound)` temporary/output capacity;
-//! decompression requests the caller-authorized logical output length and
-//! materializes exactly that many bytes.
+//! match comparison is capped at 131 bytes and match-table access has a fixed
+//! four-step radix bound. Compression requests
+//! `O(min(hash_table_entries, 256 + 48 * four_byte_prefixes) + encoded_bound)`
+//! temporary/output capacity; decompression requests the caller-authorized
+//! logical output length and materializes exactly that many bytes.
 
 #![forbid(unsafe_code)]
 
@@ -67,6 +68,11 @@ pub const MAX_HASH_TABLE_ENTRIES: usize = 1 << 20;
 
 const EMPTY_POSITION: usize = usize::MAX;
 const COPY_TAG_MASK: u8 = 0x80;
+const SPARSE_ROOT_ENTRIES: usize = 256;
+const SPARSE_RADIX: usize = 16;
+const SPARSE_RADIX_MASK: usize = SPARSE_RADIX - 1;
+const SPARSE_NODES_PER_PREFIX: usize = 3;
+const SPARSE_ENTRIES_PER_PREFIX: usize = SPARSE_NODES_PER_PREFIX * SPARSE_RADIX;
 
 /// Invalid immutable scalar-compression profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -433,8 +439,12 @@ pub const fn max_encoded_len(input_len: usize) -> Option<usize> {
 /// Compresses one caller-framed block under an immutable scalar profile.
 ///
 /// The output vector requests the checked literal-only upper bound before any
-/// token is emitted, and the match table requests its exact logical profile
-/// length. Consequently no emitted token can trigger an additional allocation.
+/// token is emitted. The match table chooses the smaller of a dense table and
+/// a fixed-depth sparse radix table whose reservation is derived from the
+/// number of four-byte prefixes in this input. Both representations retain the
+/// profile's exact logical bucket IDs, so this allocation choice cannot alter
+/// canonical encoded bytes. Consequently no emitted token or table insertion
+/// can trigger an additional allocation.
 pub fn compress(input: &[u8], profile: CodecProfile) -> Result<Vec<u8>, CompressionError> {
     compress_with_reservation(input, profile, &mut HeapReservation)
 }
@@ -509,16 +519,14 @@ fn compress_with_reservation<R: Reservation>(
         return Ok(output);
     }
 
-    let mut latest_positions = Vec::new();
-    reservation.hash_table(&mut latest_positions, profile.hash_table_entries)?;
-    latest_positions.resize(profile.hash_table_entries, EMPTY_POSITION);
+    let mut latest_positions =
+        MatchTable::with_reservation(input.len(), profile.hash_table_entries, reservation)?;
 
     let mut cursor = 0_usize;
     let mut literal_start = 0_usize;
     while input.len() - cursor >= MIN_COPY_LENGTH {
         let bucket = hash_bucket(input, cursor, profile.hash_table_entries);
-        let candidate = latest_positions[bucket];
-        latest_positions[bucket] = cursor;
+        let candidate = latest_positions.replace(bucket, cursor);
 
         let match_length = candidate_match_length(input, cursor, candidate, profile.window_size);
         if match_length >= MIN_COPY_LENGTH {
@@ -534,6 +542,81 @@ fn compress_with_reservation<R: Reservation>(
 
     debug_assert!(output.len() <= encoded_bound);
     Ok(output)
+}
+
+enum MatchTable {
+    Dense(Vec<usize>),
+    Sparse(Vec<usize>),
+}
+
+impl MatchTable {
+    fn with_reservation<R: Reservation>(
+        input_len: usize,
+        logical_entries: usize,
+        reservation: &mut R,
+    ) -> Result<Self, CompressionError> {
+        debug_assert!(input_len >= MIN_COPY_LENGTH);
+        debug_assert!(logical_entries <= MAX_HASH_TABLE_ENTRIES);
+        debug_assert!(logical_entries.is_power_of_two());
+
+        let prefix_count = input_len - (MIN_COPY_LENGTH - 1);
+        let sparse_entries = prefix_count
+            .checked_mul(SPARSE_ENTRIES_PER_PREFIX)
+            .and_then(|nodes| nodes.checked_add(SPARSE_ROOT_ENTRIES));
+        if let Some(requested) = sparse_entries.filter(|entries| *entries < logical_entries) {
+            let mut entries = Vec::new();
+            reservation.hash_table(&mut entries, requested)?;
+            entries.resize(SPARSE_ROOT_ENTRIES, EMPTY_POSITION);
+            return Ok(Self::Sparse(entries));
+        }
+
+        let mut positions = Vec::new();
+        reservation.hash_table(&mut positions, logical_entries)?;
+        positions.resize(logical_entries, EMPTY_POSITION);
+        Ok(Self::Dense(positions))
+    }
+
+    fn replace(&mut self, bucket: usize, position: usize) -> usize {
+        match self {
+            Self::Dense(positions) => {
+                let previous = positions[bucket];
+                positions[bucket] = position;
+                previous
+            }
+            Self::Sparse(entries) => {
+                debug_assert!(bucket < MAX_HASH_TABLE_ENTRIES);
+                let root_slot = bucket >> 12;
+                let mut node_offset = entries[root_slot];
+                if node_offset == EMPTY_POSITION {
+                    node_offset = append_sparse_node(entries);
+                    entries[root_slot] = node_offset;
+                }
+
+                for shift in [8_u32, 4] {
+                    let digit = (bucket >> shift) & SPARSE_RADIX_MASK;
+                    let child_slot = node_offset + digit;
+                    let mut child_offset = entries[child_slot];
+                    if child_offset == EMPTY_POSITION {
+                        child_offset = append_sparse_node(entries);
+                        entries[child_slot] = child_offset;
+                    }
+                    node_offset = child_offset;
+                }
+
+                let leaf_slot = node_offset + (bucket & SPARSE_RADIX_MASK);
+                let previous = entries[leaf_slot];
+                entries[leaf_slot] = position;
+                previous
+            }
+        }
+    }
+}
+
+fn append_sparse_node(nodes: &mut Vec<usize>) -> usize {
+    let offset = nodes.len();
+    debug_assert!(nodes.capacity() - offset >= SPARSE_RADIX);
+    nodes.extend_from_slice(&[EMPTY_POSITION; SPARSE_RADIX]);
+    offset
 }
 
 /// Decompresses one token stream to exactly `expected_decoded_len` bytes.
@@ -807,6 +890,62 @@ mod tests {
         output
     }
 
+    fn dense_reference_compress(input: &[u8], profile: CodecProfile) -> Vec<u8> {
+        let mut output = Vec::with_capacity(max_encoded_len(input.len()).unwrap());
+        if input.len() < MIN_COPY_LENGTH {
+            emit_literals(&mut output, input);
+            return output;
+        }
+
+        let mut latest_positions = vec![EMPTY_POSITION; profile.hash_table_entries];
+        let mut cursor = 0_usize;
+        let mut literal_start = 0_usize;
+        while input.len() - cursor >= MIN_COPY_LENGTH {
+            let bucket = hash_bucket(input, cursor, profile.hash_table_entries);
+            let candidate = latest_positions[bucket];
+            latest_positions[bucket] = cursor;
+
+            let match_length =
+                candidate_match_length(input, cursor, candidate, profile.window_size);
+            if match_length >= MIN_COPY_LENGTH {
+                emit_literals(&mut output, &input[literal_start..cursor]);
+                emit_copy(&mut output, cursor - candidate, match_length);
+                cursor += match_length;
+                literal_start = cursor;
+            } else {
+                cursor += 1;
+            }
+        }
+        emit_literals(&mut output, &input[literal_start..]);
+        output
+    }
+
+    #[derive(Default)]
+    struct RecordingReservation {
+        encoded_request: Option<usize>,
+        hash_request: Option<usize>,
+    }
+
+    impl Reservation for RecordingReservation {
+        fn encoded_output(
+            &mut self,
+            output: &mut Vec<u8>,
+            requested: usize,
+        ) -> Result<(), CompressionError> {
+            assert_eq!(self.encoded_request.replace(requested), None);
+            HeapReservation.encoded_output(output, requested)
+        }
+
+        fn hash_table(
+            &mut self,
+            positions: &mut Vec<usize>,
+            requested: usize,
+        ) -> Result<(), CompressionError> {
+            assert_eq!(self.hash_request.replace(requested), None);
+            HeapReservation.hash_table(positions, requested)
+        }
+    }
+
     #[test]
     fn profile_validation_covers_every_bound() {
         assert_eq!(
@@ -879,7 +1018,7 @@ mod tests {
             compress_with_reservation(b"abcd", test_profile, &mut fail_hash),
             Err(CompressionError::AllocationFailed {
                 target: CompressionAllocation::HashTable,
-                requested: 256,
+                requested: test_profile.hash_table_entries,
             })
         );
 
@@ -892,6 +1031,58 @@ mod tests {
             compress_with_reservation(b"abc", maximum_table_tiny, &mut must_not_touch_hash)
                 .unwrap(),
             [2, b'a', b'b', b'c']
+        );
+    }
+
+    #[test]
+    fn tiny_inputs_bound_match_storage_without_changing_canonical_bytes() {
+        let maximum_table =
+            CodecProfile::try_new(MAX_WINDOW_SIZE, MAX_HASH_TABLE_ENTRIES, 64).unwrap();
+        let input = b"abcd";
+        let prefix_count = input.len() - (MIN_COPY_LENGTH - 1);
+        let expected_sparse_request =
+            SPARSE_ROOT_ENTRIES + prefix_count * SPARSE_ENTRIES_PER_PREFIX;
+        let mut reservation = RecordingReservation::default();
+
+        let encoded = compress_with_reservation(input, maximum_table, &mut reservation).unwrap();
+
+        assert_eq!(
+            reservation.encoded_request,
+            Some(max_encoded_len(input.len()).unwrap())
+        );
+        assert_eq!(reservation.hash_request, Some(expected_sparse_request));
+        assert!(expected_sparse_request < MAX_HASH_TABLE_ENTRIES);
+        assert_eq!(encoded, dense_reference_compress(input, maximum_table));
+    }
+
+    #[test]
+    fn sparse_and_dense_match_tables_are_byte_identical_across_collisions() {
+        let maximum_table =
+            CodecProfile::try_new(MAX_WINDOW_SIZE, MAX_HASH_TABLE_ENTRIES, 4096).unwrap();
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+        let mut input = Vec::with_capacity(4096);
+        for index in 0..4096 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let prior = input.get(index / 3).copied().unwrap_or(0);
+            input.push((state as u8) ^ prior);
+        }
+        let mut buckets: Vec<_> = (0..=input.len() - MIN_COPY_LENGTH)
+            .map(|cursor| hash_bucket(&input, cursor, MAX_HASH_TABLE_ENTRIES))
+            .collect();
+        buckets.sort_unstable();
+        assert!(
+            buckets.windows(2).any(|pair| pair[0] == pair[1]),
+            "the deterministic corpus must exercise full logical-bucket collisions"
+        );
+
+        let sparse = compress(&input, maximum_table).unwrap();
+        let dense = dense_reference_compress(&input, maximum_table);
+        assert_eq!(sparse, dense);
+        assert_eq!(
+            decompress(&sparse, input.len(), OutputLimit::new(input.len())).unwrap(),
+            input
         );
     }
 
