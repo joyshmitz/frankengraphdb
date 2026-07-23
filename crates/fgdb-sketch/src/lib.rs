@@ -6,5 +6,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bottom_k;
 pub mod count_min;
 pub mod degree_histogram;
+pub mod distinct;
+pub mod exact_quantiles;
+pub mod zone_map;
