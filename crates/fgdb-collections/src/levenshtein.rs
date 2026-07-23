@@ -192,13 +192,36 @@ impl LevenshteinAutomaton {
         state: &LevenshteinState<'automaton>,
         bytes: &[u8],
     ) -> Result<LevenshteinState<'automaton>, LevenshteinError> {
+        self.try_advance_parts(state, None, bytes)
+    }
+
+    /// Advances through one ART edge followed by a child's compressed prefix.
+    ///
+    /// Keeping the edge and prefix as separate inputs lets an ART product walk
+    /// update automaton state directly from its representation. It never
+    /// concatenates path bytes or materializes a candidate key.
+    pub fn try_advance_edge_and_prefix<'automaton>(
+        &'automaton self,
+        state: &LevenshteinState<'automaton>,
+        edge: u8,
+        compressed_prefix: &[u8],
+    ) -> Result<LevenshteinState<'automaton>, LevenshteinError> {
+        self.try_advance_parts(state, Some(edge), compressed_prefix)
+    }
+
+    fn try_advance_parts<'automaton>(
+        &'automaton self,
+        state: &LevenshteinState<'automaton>,
+        leading_edge: Option<u8>,
+        bytes: &[u8],
+    ) -> Result<LevenshteinState<'automaton>, LevenshteinError> {
         let expected = self.validate_state(state)?;
         let mut current = try_state_row(expected)?;
         current.extend_from_slice(&state.distances);
         let mut next = try_state_row(expected)?;
         let dead = u16::from(self.max_edits) + 1;
 
-        for &byte in bytes {
+        for byte in leading_edge.into_iter().chain(bytes.iter().copied()) {
             advance_row(&self.pattern, &current, &mut next, byte, dead);
             core::mem::swap(&mut current, &mut next);
             next.clear();
@@ -402,6 +425,21 @@ mod tests {
         }
         assert_eq!(whole, bytewise);
         assert!(automaton.is_match(&whole).expect("compatible state"));
+    }
+
+    #[test]
+    fn edge_plus_compressed_prefix_equals_contiguous_advance() {
+        let automaton =
+            LevenshteinAutomaton::try_new(b"chronicle", 2, 32).expect("bounded pattern");
+        let initial = automaton.initial_state().expect("bounded state");
+        let segmented = automaton
+            .try_advance_edge_and_prefix(&initial, b'c', b"hronical")
+            .expect("compatible state");
+        let contiguous = automaton
+            .try_advance_bytes(&initial, b"chronical")
+            .expect("compatible state");
+        assert_eq!(segmented, contiguous);
+        assert!(automaton.is_match(&segmented).expect("compatible state"));
     }
 
     #[test]

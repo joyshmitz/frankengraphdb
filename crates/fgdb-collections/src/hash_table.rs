@@ -12,14 +12,12 @@ use core::hash::{Hash, Hasher};
 use core::mem;
 use core::slice;
 
-/// Number of control bytes inspected by one scalar probe group.
-///
-/// Future SIMD implementations must preserve the scalar group's bucket order
-/// and may only replace the control-byte classification step.
-pub const CONTROL_GROUP_WIDTH: usize = 16;
+pub use crate::probe::CONTROL_GROUP_WIDTH;
+use crate::probe::{
+    ControlGroup, ControlTag, DELETED_CONTROL as DELETED, EMPTY_CONTROL as EMPTY,
+    SCALAR_CONTROL_GROUP_DISPATCH,
+};
 
-const EMPTY: u8 = 0x80;
-const DELETED: u8 = 0xfe;
 const MIN_BUCKETS: usize = CONTROL_GROUP_WIDTH;
 const LOAD_DENOMINATOR: usize = 8;
 const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -312,7 +310,7 @@ impl<K, V> DeterministicHashTable<K, V> {
         for entry in self.entries.iter().flatten() {
             let index = first_empty_bucket(&replacement.controls, entry.hash)
                 .ok_or(HashTableError::InvariantViolation)?;
-            replacement.controls[index] = hash_tag(entry.hash);
+            replacement.controls[index] = ControlTag::from_hash(entry.hash).get();
             planned_indexes.push(index);
         }
         if planned_indexes.len() != self.len {
@@ -337,7 +335,11 @@ impl<K, V> DeterministicHashTable<K, V> {
             match (control, slot) {
                 (EMPTY, None) => {}
                 (DELETED, None) => deleted += 1,
-                (tag, Some(entry)) if tag < EMPTY && tag == hash_tag(entry.hash) => live += 1,
+                (tag, Some(entry))
+                    if tag < EMPTY && tag == ControlTag::from_hash(entry.hash).get() =>
+                {
+                    live += 1;
+                }
                 _ => return false,
             }
         }
@@ -426,48 +428,47 @@ impl<K: Hash + Eq, V> DeterministicHashTable<K, V> {
         if self.controls[index] == DELETED {
             self.deleted -= 1;
         }
-        self.controls[index] = hash_tag(hash);
+        self.controls[index] = ControlTag::from_hash(hash).get();
         self.entries[index] = Some(Entry { hash, key, value });
         self.len += 1;
         Ok(None)
     }
 
     fn locate_for_insert(&self, key: &K, hash: u64) -> Result<InsertLocation, HashTableError> {
-        let tag = hash_tag(hash);
+        let tag = ControlTag::from_hash(hash);
         let mut first_deleted = None;
         let mut probe = GroupProbe::new(hash, self.bucket_count());
         while let Some(group_start) = probe.next_group() {
-            for lane in 0..CONTROL_GROUP_WIDTH {
+            let group = ControlGroup::gather_wrapping(&self.controls, group_start)
+                .ok_or(HashTableError::InvariantViolation)?;
+            let masks = SCALAR_CONTROL_GROUP_DISPATCH.classify(&group, tag);
+            let lanes_before_empty = masks.empty.first().unwrap_or(CONTROL_GROUP_WIDTH);
+            for lane in 0..lanes_before_empty {
                 let index = (group_start + lane) & (self.bucket_count() - 1);
-                match self.controls[index] {
-                    EMPTY => {
-                        if self.entries[index].is_some() {
-                            return Err(HashTableError::InvariantViolation);
-                        }
-                        return Ok(InsertLocation::Vacant(first_deleted.unwrap_or(index)));
+                if masks.deleted.contains(lane) {
+                    if self.entries[index].is_some() {
+                        return Err(HashTableError::InvariantViolation);
                     }
-                    DELETED => {
-                        if self.entries[index].is_some() {
-                            return Err(HashTableError::InvariantViolation);
-                        }
-                        if first_deleted.is_none() {
-                            first_deleted = Some(index);
-                        }
+                    if first_deleted.is_none() {
+                        first_deleted = Some(index);
                     }
-                    control if control == tag => {
-                        let Some(entry) = self.entries[index].as_ref() else {
-                            return Err(HashTableError::InvariantViolation);
-                        };
-                        if entry.hash == hash && entry.key == *key {
-                            return Ok(InsertLocation::Existing(index));
-                        }
+                } else if masks.matching.contains(lane) {
+                    let Some(entry) = self.entries[index].as_ref() else {
+                        return Err(HashTableError::InvariantViolation);
+                    };
+                    if entry.hash == hash && entry.key == *key {
+                        return Ok(InsertLocation::Existing(index));
                     }
-                    _ => {
-                        if self.entries[index].is_none() {
-                            return Err(HashTableError::InvariantViolation);
-                        }
-                    }
+                } else if self.entries[index].is_none() {
+                    return Err(HashTableError::InvariantViolation);
                 }
+            }
+            if let Some(empty_lane) = masks.empty.first() {
+                let index = (group_start + empty_lane) & (self.bucket_count() - 1);
+                if self.entries[index].is_some() {
+                    return Err(HashTableError::InvariantViolation);
+                }
+                return Ok(InsertLocation::Vacant(first_deleted.unwrap_or(index)));
             }
         }
         Ok(first_deleted.map_or(InsertLocation::Saturated, InsertLocation::Vacant))
@@ -534,28 +535,29 @@ impl<K, V> DeterministicHashTable<K, V> {
             return None;
         }
         let hash = self.hash(key);
-        let tag = hash_tag(hash);
+        let tag = ControlTag::from_hash(hash);
         let mut probe = GroupProbe::new(hash, self.bucket_count());
         while let Some(group_start) = probe.next_group() {
-            for lane in 0..CONTROL_GROUP_WIDTH {
+            let group = ControlGroup::gather_wrapping(&self.controls, group_start)?;
+            let masks = SCALAR_CONTROL_GROUP_DISPATCH.classify(&group, tag);
+            let lanes_before_empty = masks.empty.first().unwrap_or(CONTROL_GROUP_WIDTH);
+            for lane in 0..lanes_before_empty {
                 let index = (group_start + lane) & (self.bucket_count() - 1);
-                match self.controls[index] {
-                    EMPTY => return None,
-                    DELETED => {
-                        if self.entries[index].is_some() {
-                            return None;
-                        }
+                if masks.deleted.contains(lane) {
+                    if self.entries[index].is_some() {
+                        return None;
                     }
-                    control if control == tag => {
-                        let entry = self.entries[index].as_ref()?;
-                        if entry.hash == hash && entry.key.borrow() == key {
-                            return Some(index);
-                        }
+                } else if masks.matching.contains(lane) {
+                    let entry = self.entries[index].as_ref()?;
+                    if entry.hash == hash && entry.key.borrow() == key {
+                        return Some(index);
                     }
-                    _ => {
-                        self.entries[index].as_ref()?;
-                    }
+                } else {
+                    self.entries[index].as_ref()?;
                 }
+            }
+            if masks.empty.first().is_some() {
+                return None;
             }
         }
         None
@@ -598,21 +600,16 @@ impl GroupProbe {
     }
 }
 
-const fn hash_tag(hash: u64) -> u8 {
-    ((hash >> 57) & 0x7f) as u8
-}
-
 fn first_empty_bucket(controls: &[u8], hash: u64) -> Option<usize> {
     if controls.is_empty() {
         return None;
     }
     let mut probe = GroupProbe::new(hash, controls.len());
     while let Some(group_start) = probe.next_group() {
-        for lane in 0..CONTROL_GROUP_WIDTH {
-            let index = (group_start + lane) & (controls.len() - 1);
-            if controls[index] == EMPTY {
-                return Some(index);
-            }
+        let group = ControlGroup::gather_wrapping(controls, group_start)?;
+        let masks = SCALAR_CONTROL_GROUP_DISPATCH.classify(&group, ControlTag::from_hash(hash));
+        if let Some(lane) = masks.empty.first() {
+            return Some((group_start + lane) & (controls.len() - 1));
         }
     }
     None

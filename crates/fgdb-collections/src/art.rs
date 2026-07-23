@@ -9,6 +9,8 @@ use core::fmt;
 use core::ops::{Bound, RangeBounds};
 use std::collections::TryReserveError;
 
+use crate::levenshtein::{LevenshteinAutomaton, LevenshteinError, LevenshteinState};
+
 /// Default maximum accepted key length (16 MiB).
 pub const DEFAULT_MAX_KEY_BYTES: usize = 16 * 1024 * 1024;
 
@@ -73,6 +75,63 @@ impl fmt::Display for ArtError {
 }
 
 impl std::error::Error for ArtError {}
+
+/// Bounded scratch policy for an ART/Levenshtein product walk.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArtLevenshteinLimits {
+    /// Maximum number of live traversal frames.
+    ///
+    /// One frame retains one automaton row and one ART node reference.
+    pub max_stack_frames: usize,
+}
+
+impl Default for ArtLevenshteinLimits {
+    fn default() -> Self {
+        Self {
+            max_stack_frames: 1_024,
+        }
+    }
+}
+
+/// A checked ART/Levenshtein product-traversal failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtLevenshteinError {
+    /// Constructing or advancing the bounded automaton state failed.
+    Automaton(LevenshteinError),
+    /// Reserving the caller-bounded traversal frame stack failed.
+    TraversalAllocationFailed { requested_frames: usize },
+    /// A matching path needs more live frames than the caller allowed.
+    TraversalDepthLimitExceeded { max_stack_frames: usize },
+    /// The ART's private child representation violated its own contract.
+    RepresentationInvariant { operation: &'static str },
+}
+
+impl fmt::Display for ArtLevenshteinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Automaton(error) => write!(f, "ART Levenshtein state failed: {error}"),
+            Self::TraversalAllocationFailed { requested_frames } => write!(
+                f,
+                "ART Levenshtein traversal could not reserve {requested_frames} frames"
+            ),
+            Self::TraversalDepthLimitExceeded { max_stack_frames } => write!(
+                f,
+                "ART Levenshtein traversal exceeded its {max_stack_frames}-frame limit"
+            ),
+            Self::RepresentationInvariant { operation } => {
+                write!(f, "ART representation invariant failed while {operation}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ArtLevenshteinError {}
+
+impl From<LevenshteinError> for ArtLevenshteinError {
+    fn from(error: LevenshteinError) -> Self {
+        Self::Automaton(error)
+    }
+}
 
 /// The adaptive representation used by one internal ART node.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -981,6 +1040,21 @@ impl<V> AdaptiveRadixTree<V> {
         ArtIter::new(node)
     }
 
+    /// Starts a bounded, lexicographically ordered ART/Levenshtein product
+    /// traversal.
+    ///
+    /// Automaton state advances through the root prefix and then each
+    /// `(edge, compressed_prefix)` pair directly. Candidate strings are never
+    /// assembled as traversal scratch, and a dead automaton state prunes its
+    /// entire ART subtree.
+    pub fn try_levenshtein_iter<'tree, 'automaton>(
+        &'tree self,
+        automaton: &'automaton LevenshteinAutomaton,
+        limits: ArtLevenshteinLimits,
+    ) -> Result<ArtLevenshteinIter<'tree, 'automaton, V>, ArtLevenshteinError> {
+        ArtLevenshteinIter::try_new(self.root.as_ref(), automaton, limits)
+    }
+
     /// Iterates over mappings in a standard lexicographic byte range.
     ///
     /// Byte-slice bounds can be supplied without allocating:
@@ -1136,6 +1210,188 @@ where
         None
     }
 }
+
+/// One accepted key/value pair from an ART/Levenshtein product walk.
+#[derive(Debug)]
+pub struct ArtLevenshteinMatch<'tree, V> {
+    /// Existing canonical key storage owned by the tree.
+    pub key: &'tree [u8],
+    /// Value associated with `key`.
+    pub value: &'tree V,
+    /// Exact byte-level edit distance, bounded by the automaton's ceiling.
+    pub distance: u16,
+}
+
+struct ArtLevenshteinFrame<'tree, 'automaton, V> {
+    node: &'tree Node<V>,
+    state: LevenshteinState<'automaton>,
+    yielded_entry: bool,
+    next_child: usize,
+}
+
+/// Fallible, ordered iterator over an ART/Levenshtein product.
+///
+/// A traversal error is yielded once and then the iterator is fused.
+pub struct ArtLevenshteinIter<'tree, 'automaton, V> {
+    automaton: &'automaton LevenshteinAutomaton,
+    limits: ArtLevenshteinLimits,
+    stack: Vec<ArtLevenshteinFrame<'tree, 'automaton, V>>,
+    visited_nodes: usize,
+    pruned_subtrees: usize,
+    exhausted: bool,
+}
+
+impl<'tree, 'automaton, V> ArtLevenshteinIter<'tree, 'automaton, V> {
+    fn try_new(
+        root: Option<&'tree Node<V>>,
+        automaton: &'automaton LevenshteinAutomaton,
+        limits: ArtLevenshteinLimits,
+    ) -> Result<Self, ArtLevenshteinError> {
+        let mut stack = Vec::new();
+        stack
+            .try_reserve_exact(limits.max_stack_frames)
+            .map_err(
+                |_: TryReserveError| ArtLevenshteinError::TraversalAllocationFailed {
+                    requested_frames: limits.max_stack_frames,
+                },
+            )?;
+        let mut traversal = Self {
+            automaton,
+            limits,
+            stack,
+            visited_nodes: 0,
+            pruned_subtrees: 0,
+            exhausted: false,
+        };
+
+        let Some(root) = root else {
+            return Ok(traversal);
+        };
+        if limits.max_stack_frames == 0 {
+            return Err(ArtLevenshteinError::TraversalDepthLimitExceeded {
+                max_stack_frames: 0,
+            });
+        }
+
+        let initial = automaton.initial_state()?;
+        let root_state = if root.prefix.is_empty() {
+            initial
+        } else {
+            automaton.try_advance_bytes(&initial, &root.prefix)?
+        };
+        traversal.visited_nodes = 1;
+        if root_state.can_match_descendant() {
+            traversal.stack.push(ArtLevenshteinFrame {
+                node: root,
+                state: root_state,
+                yielded_entry: false,
+                next_child: 0,
+            });
+        } else {
+            traversal.pruned_subtrees = 1;
+        }
+        Ok(traversal)
+    }
+
+    /// Number of ART nodes whose compressed path was evaluated so far.
+    #[must_use]
+    pub const fn visited_nodes(&self) -> usize {
+        self.visited_nodes
+    }
+
+    /// Number of whole subtrees rejected by a dead automaton state so far.
+    #[must_use]
+    pub const fn pruned_subtrees(&self) -> usize {
+        self.pruned_subtrees
+    }
+
+    fn fail(
+        &mut self,
+        error: ArtLevenshteinError,
+    ) -> Option<Result<ArtLevenshteinMatch<'tree, V>, ArtLevenshteinError>> {
+        self.exhausted = true;
+        self.stack.clear();
+        Some(Err(error))
+    }
+}
+
+impl<'tree, V> Iterator for ArtLevenshteinIter<'tree, '_, V> {
+    type Item = Result<ArtLevenshteinMatch<'tree, V>, ArtLevenshteinError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.exhausted {
+            return None;
+        }
+
+        loop {
+            let Some(frame) = self.stack.last_mut() else {
+                self.exhausted = true;
+                return None;
+            };
+
+            if !frame.yielded_entry {
+                frame.yielded_entry = true;
+                if let Some(entry) = &frame.node.entry {
+                    let is_match = match self.automaton.is_match(&frame.state) {
+                        Ok(is_match) => is_match,
+                        Err(error) => return self.fail(error.into()),
+                    };
+                    if is_match {
+                        let Some(distance) = frame.state.terminal_distance() else {
+                            return self.fail(ArtLevenshteinError::RepresentationInvariant {
+                                operation: "reading a terminal automaton distance",
+                            });
+                        };
+                        return Some(Ok(ArtLevenshteinMatch {
+                            key: &entry.key,
+                            value: &entry.value,
+                            distance,
+                        }));
+                    }
+                }
+            }
+
+            if frame.next_child >= frame.node.children.len() {
+                self.stack.pop();
+                continue;
+            }
+
+            let ordinal = frame.next_child;
+            frame.next_child += 1;
+            let Some((edge, child)) = frame.node.children.edge_at(ordinal) else {
+                return self.fail(ArtLevenshteinError::RepresentationInvariant {
+                    operation: "reading an ordered child",
+                });
+            };
+            let child_state =
+                match self
+                    .automaton
+                    .try_advance_edge_and_prefix(&frame.state, edge, &child.prefix)
+                {
+                    Ok(state) => state,
+                    Err(error) => return self.fail(error.into()),
+                };
+            self.visited_nodes = self.visited_nodes.saturating_add(1);
+            if !child_state.can_match_descendant() {
+                self.pruned_subtrees = self.pruned_subtrees.saturating_add(1);
+                continue;
+            }
+            if self.stack.len() >= self.limits.max_stack_frames {
+                return self.fail(ArtLevenshteinError::TraversalDepthLimitExceeded {
+                    max_stack_frames: self.limits.max_stack_frames,
+                });
+            }
+            self.stack.push(ArtLevenshteinFrame {
+                node: child,
+                state: child_state,
+                yielded_entry: false,
+                next_child: 0,
+            });
+        }
+    }
+}
+
+impl<V> core::iter::FusedIterator for ArtLevenshteinIter<'_, '_, V> {}
 
 #[cfg(test)]
 mod tests {
@@ -1430,6 +1686,176 @@ mod tests {
             }
             key
         }
+    }
+
+    fn simple_edit_distance(left: &[u8], right: &[u8]) -> usize {
+        let mut previous: Vec<usize> = (0..=right.len()).collect();
+        let mut current = vec![0; right.len() + 1];
+        for (left_index, &left_byte) in left.iter().enumerate() {
+            current[0] = left_index + 1;
+            for (right_index, &right_byte) in right.iter().enumerate() {
+                current[right_index + 1] = (current[right_index] + 1)
+                    .min(previous[right_index + 1] + 1)
+                    .min(previous[right_index] + usize::from(left_byte != right_byte));
+            }
+            core::mem::swap(&mut previous, &mut current);
+        }
+        previous[right.len()]
+    }
+
+    #[test]
+    fn generated_token_product_walk_matches_simple_distance_oracle() {
+        const SEED: u64 = 0x4f3c_2a19_d781_b605;
+        let mut rng = DeterministicRng(SEED);
+        let mut reference = BTreeMap::<Vec<u8>, u64>::new();
+        let stems: [&[u8]; 8] = [
+            b"branch/",
+            b"chronicle/",
+            b"commit/",
+            b"graph/",
+            b"grant/",
+            b"strata/",
+            b"subscription/",
+            b"warden/",
+        ];
+        for ordinal in 0u64..768 {
+            let stem = stems[usize::from(rng.next().to_le_bytes()[0]) % stems.len()];
+            let suffix_len = 2 + usize::from(rng.next().to_le_bytes()[0] % 12);
+            let mut token = Vec::with_capacity(stem.len() + suffix_len);
+            token.extend_from_slice(stem);
+            for _ in 0..suffix_len {
+                token.push(b'a' + (rng.next().to_le_bytes()[0] % 12));
+            }
+            reference.insert(token, ordinal);
+        }
+
+        let mut tree = AdaptiveRadixTree::new();
+        for (key, value) in &reference {
+            assert_eq!(tree.insert(key, *value), Ok(None));
+        }
+
+        let patterns: [&[u8]; 7] = [
+            b"branch/agent",
+            b"chronicle/marker",
+            b"graph/memory",
+            b"grant/access",
+            b"strata/run",
+            b"warden/policy",
+            b"zzzzzzzzzz",
+        ];
+        let mut total_pruned = 0usize;
+        for pattern in patterns {
+            for maximum in 0..=2 {
+                let automaton = LevenshteinAutomaton::try_new(pattern, maximum, 64);
+                assert!(
+                    automaton.is_ok(),
+                    "bounded generated pattern must construct"
+                );
+                let Ok(automaton) = automaton else {
+                    return;
+                };
+                let traversal = tree.try_levenshtein_iter(
+                    &automaton,
+                    ArtLevenshteinLimits {
+                        max_stack_frames: 128,
+                    },
+                );
+                assert!(
+                    traversal.is_ok(),
+                    "bounded generated traversal must construct"
+                );
+                let Ok(mut traversal) = traversal else {
+                    return;
+                };
+                let actual: Result<Vec<_>, _> = traversal
+                    .by_ref()
+                    .map(|item| {
+                        item.map(|matched| {
+                            (
+                                matched.key.to_vec(),
+                                *matched.value,
+                                usize::from(matched.distance),
+                            )
+                        })
+                    })
+                    .collect();
+                let expected: Vec<_> = reference
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        let distance = simple_edit_distance(pattern, key);
+                        (distance <= usize::from(maximum)).then(|| (key.clone(), *value, distance))
+                    })
+                    .collect();
+                assert_eq!(
+                    actual,
+                    Ok(expected),
+                    "seed={SEED} pattern={pattern:?} maximum={maximum}"
+                );
+                total_pruned = total_pruned.saturating_add(traversal.pruned_subtrees());
+                assert!(
+                    traversal.visited_nodes() <= tree.node_kind_histogram().total() + tree.len()
+                );
+            }
+        }
+        assert!(total_pruned > 0);
+    }
+
+    #[test]
+    fn product_walk_enforces_typed_frame_and_allocation_limits() {
+        let automaton_result = LevenshteinAutomaton::try_new(b"aaaaaaaaaa", 2, 16);
+        assert!(automaton_result.is_ok(), "bounded pattern must construct");
+        let Ok(automaton) = automaton_result else {
+            return;
+        };
+        let mut tree = AdaptiveRadixTree::new();
+        for length in 1..=10 {
+            assert_eq!(tree.insert(vec![b'a'; length], length), Ok(None));
+        }
+
+        let traversal = tree.try_levenshtein_iter(
+            &automaton,
+            ArtLevenshteinLimits {
+                max_stack_frames: 2,
+            },
+        );
+        assert!(traversal.is_ok(), "root fits the frame limit");
+        let Ok(traversal) = traversal else {
+            return;
+        };
+        let result: Result<Vec<_>, _> = traversal.collect();
+        assert!(matches!(
+            result,
+            Err(ArtLevenshteinError::TraversalDepthLimitExceeded {
+                max_stack_frames: 2
+            })
+        ));
+
+        let zero_limit = tree.try_levenshtein_iter(
+            &automaton,
+            ArtLevenshteinLimits {
+                max_stack_frames: 0,
+            },
+        );
+        assert!(matches!(
+            zero_limit,
+            Err(ArtLevenshteinError::TraversalDepthLimitExceeded {
+                max_stack_frames: 0
+            })
+        ));
+
+        let empty = AdaptiveRadixTree::<u8>::new();
+        let impossible_reservation = empty.try_levenshtein_iter(
+            &automaton,
+            ArtLevenshteinLimits {
+                max_stack_frames: usize::MAX,
+            },
+        );
+        assert!(matches!(
+            impossible_reservation,
+            Err(ArtLevenshteinError::TraversalAllocationFailed {
+                requested_frames: usize::MAX
+            })
+        ));
     }
 
     #[test]

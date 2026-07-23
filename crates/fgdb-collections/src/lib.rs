@@ -10,4 +10,5 @@
 pub mod art;
 pub mod hash_table;
 pub mod levenshtein;
+pub mod probe;
 pub mod succinct;

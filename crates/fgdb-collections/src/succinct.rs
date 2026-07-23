@@ -40,6 +40,8 @@ pub enum AllocationTarget {
     RankSuperblocks,
     /// Counts at 64-bit boundaries relative to a superblock.
     RankSubblocks,
+    /// Exact byte accounting for the completed representation.
+    StorageAccounting,
 }
 
 /// Typed failure from succinct bitvector construction.
@@ -64,6 +66,20 @@ pub enum BitVectorError {
         word: u64,
         /// Exactly the non-zero bits outside `bit_len`.
         non_zero_padding: u64,
+    },
+    /// Appending bits would exceed a builder's explicit maximum.
+    BitLimitExceeded {
+        /// Length the operation would produce.
+        attempted_bits: usize,
+        /// Builder maximum fixed at construction.
+        max_bits: usize,
+    },
+    /// Computing an appended length exceeded the platform index domain.
+    LengthOverflow {
+        /// Builder length before the rejected operation.
+        current_bits: usize,
+        /// Number of bits the operation attempted to append.
+        additional_bits: usize,
     },
     /// Directory-size arithmetic exceeded `usize`.
     SizeOverflow {
@@ -99,8 +115,22 @@ impl fmt::Display for BitVectorError {
                 formatter,
                 "word {word_index} has non-zero padding {non_zero_padding:#018x} outside bit length {bit_len}"
             ),
+            Self::BitLimitExceeded {
+                attempted_bits,
+                max_bits,
+            } => write!(
+                formatter,
+                "bitvector builder would reach {attempted_bits} bits, maximum is {max_bits}"
+            ),
+            Self::LengthOverflow {
+                current_bits,
+                additional_bits,
+            } => write!(
+                formatter,
+                "adding {additional_bits} bits to builder length {current_bits} overflowed"
+            ),
             Self::SizeOverflow { target } => {
-                write!(formatter, "{target:?} directory size overflowed")
+                write!(formatter, "{target:?} representation size overflowed")
             }
             Self::AllocationFailed { target, requested } => write!(
                 formatter,
@@ -120,30 +150,98 @@ impl std::error::Error for BitVectorError {}
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct StorageBreakdown {
     /// Canonical `u64` bit-word bytes, including zero final-word padding.
-    pub word_bytes: usize,
+    word_bytes: usize,
     /// Cumulative 512-bit rank-directory bytes.
-    pub rank_superblock_bytes: usize,
+    rank_superblock_bytes: usize,
     /// Relative 64-bit rank-directory bytes.
-    pub rank_subblock_bytes: usize,
+    rank_subblock_bytes: usize,
+    total_bytes: usize,
 }
 
 impl StorageBreakdown {
+    /// Bytes in canonical bit-word elements.
+    #[must_use]
+    pub const fn word_bytes(self) -> usize {
+        self.word_bytes
+    }
+
+    /// Bytes in cumulative superblock-directory elements.
+    #[must_use]
+    pub const fn rank_superblock_bytes(self) -> usize {
+        self.rank_superblock_bytes
+    }
+
+    /// Bytes in relative subblock-directory elements.
+    #[must_use]
+    pub const fn rank_subblock_bytes(self) -> usize {
+        self.rank_subblock_bytes
+    }
+
     /// Exact sum of all heap-owned representation arrays.
     #[must_use]
     pub const fn total_bytes(self) -> usize {
-        self.word_bytes + self.rank_superblock_bytes + self.rank_subblock_bytes
+        self.total_bytes
+    }
+
+    fn try_from_elements(
+        word_elements: usize,
+        superblock_elements: usize,
+        subblock_elements: usize,
+    ) -> Result<Self, BitVectorError> {
+        let word_bytes =
+            word_elements
+                .checked_mul(size_of::<u64>())
+                .ok_or(BitVectorError::SizeOverflow {
+                    target: AllocationTarget::StorageAccounting,
+                })?;
+        let rank_superblock_bytes = superblock_elements.checked_mul(size_of::<usize>()).ok_or(
+            BitVectorError::SizeOverflow {
+                target: AllocationTarget::StorageAccounting,
+            },
+        )?;
+        let rank_subblock_bytes = subblock_elements.checked_mul(size_of::<u16>()).ok_or(
+            BitVectorError::SizeOverflow {
+                target: AllocationTarget::StorageAccounting,
+            },
+        )?;
+        let total_bytes = word_bytes
+            .checked_add(rank_superblock_bytes)
+            .and_then(|total| total.checked_add(rank_subblock_bytes))
+            .ok_or(BitVectorError::SizeOverflow {
+                target: AllocationTarget::StorageAccounting,
+            })?;
+        Ok(Self {
+            word_bytes,
+            rank_superblock_bytes,
+            rank_subblock_bytes,
+            total_bytes,
+        })
     }
 }
 
 /// Immutable canonical bitvector with scalar rank/select support.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct SuccinctBitVector {
     bit_len: usize,
     words: Vec<u64>,
     rank_superblocks: Vec<usize>,
     rank_subblocks: Vec<u16>,
     one_count: usize,
+    logical_storage: StorageBreakdown,
+    retained_storage: StorageBreakdown,
 }
+
+impl PartialEq for SuccinctBitVector {
+    fn eq(&self, other: &Self) -> bool {
+        self.bit_len == other.bit_len
+            && self.words == other.words
+            && self.rank_superblocks == other.rank_superblocks
+            && self.rank_subblocks == other.rank_subblocks
+            && self.one_count == other.one_count
+    }
+}
+
+impl Eq for SuccinctBitVector {}
 
 impl SuccinctBitVector {
     /// Constructs a vector from canonical little-bit-endian words.
@@ -194,13 +292,34 @@ impl SuccinctBitVector {
             }
             rank_subblocks.push(within_superblock);
             let word_ones = word.count_ones() as u16;
-            within_superblock += word_ones;
-            total += usize::from(word_ones);
+            within_superblock =
+                within_superblock
+                    .checked_add(word_ones)
+                    .ok_or(BitVectorError::SizeOverflow {
+                        target: AllocationTarget::RankSubblocks,
+                    })?;
+            total =
+                total
+                    .checked_add(usize::from(word_ones))
+                    .ok_or(BitVectorError::SizeOverflow {
+                        target: AllocationTarget::RankSuperblocks,
+                    })?;
         }
         rank_superblocks.push(total);
 
         debug_assert_eq!(rank_superblocks.len(), superblock_entries);
         debug_assert_eq!(rank_subblocks.len(), words.len());
+
+        let logical_storage = StorageBreakdown::try_from_elements(
+            words.len(),
+            rank_superblocks.len(),
+            rank_subblocks.len(),
+        )?;
+        let retained_storage = StorageBreakdown::try_from_elements(
+            words.capacity(),
+            rank_superblocks.capacity(),
+            rank_subblocks.capacity(),
+        )?;
 
         Ok(Self {
             bit_len,
@@ -208,6 +327,8 @@ impl SuccinctBitVector {
             rank_superblocks,
             rank_subblocks,
             one_count: total,
+            logical_storage,
+            retained_storage,
         })
     }
 
@@ -216,18 +337,9 @@ impl SuccinctBitVector {
     /// Word storage and both rank-directory allocations are fallible. The
     /// resulting final-word padding is zero by construction.
     pub fn try_from_bits(bits: &[bool]) -> Result<Self, BitVectorError> {
-        let words_needed = word_count(bits.len());
-        let mut words = Vec::new();
-        reserve_exact(&mut words, words_needed, AllocationTarget::Words)?;
-        words.resize(words_needed, 0);
-
-        for (bit_index, &bit) in bits.iter().enumerate() {
-            if bit {
-                words[bit_index / WORD_BITS] |= 1_u64 << (bit_index % WORD_BITS);
-            }
-        }
-
-        Self::try_from_words(bits.len(), words)
+        let mut builder = SuccinctBitVectorBuilder::try_with_capacity(bits.len(), bits.len())?;
+        builder.extend(bits)?;
+        builder.finish()
     }
 
     /// Explicit logical length in bits.
@@ -395,11 +507,7 @@ impl SuccinctBitVector {
     /// Exact byte accounting for heap-owned representation arrays.
     #[must_use]
     pub fn storage_breakdown(&self) -> StorageBreakdown {
-        StorageBreakdown {
-            word_bytes: self.words.len() * size_of::<u64>(),
-            rank_superblock_bytes: self.rank_superblocks.len() * size_of::<usize>(),
-            rank_subblock_bytes: self.rank_subblocks.len() * size_of::<u16>(),
-        }
+        self.logical_storage
     }
 
     /// Exact total bytes in the heap-owned representation arrays.
@@ -407,7 +515,24 @@ impl SuccinctBitVector {
     /// This is the sum returned by [`StorageBreakdown::total_bytes`].
     #[must_use]
     pub fn logical_storage_bytes(&self) -> usize {
-        self.storage_breakdown().total_bytes()
+        self.logical_storage.total_bytes()
+    }
+
+    /// Exact byte accounting from the three backing-vector capacities.
+    ///
+    /// This includes spare elements retained by `Vec`, but still excludes
+    /// allocator bookkeeping and allocation-size-class rounding. It may exceed
+    /// [`Self::logical_storage_bytes`] when a caller-supplied word vector or a
+    /// builder retained spare capacity.
+    #[must_use]
+    pub const fn retained_storage_breakdown(&self) -> StorageBreakdown {
+        self.retained_storage
+    }
+
+    /// Exact element-capacity bytes retained by the three backing vectors.
+    #[must_use]
+    pub const fn retained_storage_bytes(&self) -> usize {
+        self.retained_storage.total_bytes()
     }
 
     fn zeros_before_superblock(&self, superblock_index: usize) -> usize {
@@ -421,6 +546,188 @@ impl SuccinctBitVector {
     fn valid_bits_in_word(&self, word_index: usize) -> usize {
         let bit_start = word_index.checked_mul(WORD_BITS).unwrap_or(self.bit_len);
         self.bit_len.saturating_sub(bit_start).min(WORD_BITS)
+    }
+}
+
+/// Fallible canonical word builder for [`SuccinctBitVector`].
+///
+/// The maximum is immutable and checked before any mutating append. Slice
+/// extension is transactional with respect to limit and allocation failures:
+/// either every bit is appended or the builder remains unchanged. At every
+/// observable state, unused bits in the final word are zero.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SuccinctBitVectorBuilder {
+    max_bits: usize,
+    bit_len: usize,
+    words: Vec<u64>,
+}
+
+impl SuccinctBitVectorBuilder {
+    /// Creates an empty builder without allocating.
+    #[must_use]
+    pub const fn new(max_bits: usize) -> Self {
+        Self {
+            max_bits,
+            bit_len: 0,
+            words: Vec::new(),
+        }
+    }
+
+    /// Creates an empty builder and fallibly reserves for `capacity_bits`.
+    ///
+    /// `capacity_bits` is an allocation hint, not the logical length, and may
+    /// not exceed `max_bits`. The allocator may retain more whole-word capacity
+    /// than requested; [`Self::capacity_bits`] reports the exact usable result,
+    /// capped by the explicit maximum.
+    pub fn try_with_capacity(
+        max_bits: usize,
+        capacity_bits: usize,
+    ) -> Result<Self, BitVectorError> {
+        if capacity_bits > max_bits {
+            return Err(BitVectorError::BitLimitExceeded {
+                attempted_bits: capacity_bits,
+                max_bits,
+            });
+        }
+
+        let mut words = Vec::new();
+        reserve_exact(
+            &mut words,
+            word_count(capacity_bits),
+            AllocationTarget::Words,
+        )?;
+        Ok(Self {
+            max_bits,
+            bit_len: 0,
+            words,
+        })
+    }
+
+    /// Current logical length.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.bit_len
+    }
+
+    /// Whether no bits have been appended.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.bit_len == 0
+    }
+
+    /// Immutable maximum logical length.
+    #[must_use]
+    pub const fn max_bits(&self) -> usize {
+        self.max_bits
+    }
+
+    /// Number of bits that may still be appended before reaching the maximum.
+    #[must_use]
+    pub const fn remaining_bits(&self) -> usize {
+        self.max_bits - self.bit_len
+    }
+
+    /// Current packed-word length.
+    #[must_use]
+    pub fn word_len(&self) -> usize {
+        self.words.len()
+    }
+
+    /// Actual packed-word capacity retained by the allocator.
+    #[must_use]
+    pub fn word_capacity(&self) -> usize {
+        self.words.capacity()
+    }
+
+    /// Exact logical capacity available without another word-vector allocation.
+    ///
+    /// The value is capped at `max_bits`; allocator capacity can never widen
+    /// the builder's explicit resource limit.
+    #[must_use]
+    pub fn capacity_bits(&self) -> usize {
+        let maximum_words = word_count(self.max_bits);
+        if self.words.capacity() >= maximum_words {
+            self.max_bits
+        } else {
+            // Here capacity < ceil(max_bits / 64), so this multiplication is
+            // bounded by max_bits and cannot overflow.
+            self.words.capacity() * WORD_BITS
+        }
+    }
+
+    /// Bits appendable without a word-vector allocation.
+    #[must_use]
+    pub fn spare_capacity_bits(&self) -> usize {
+        self.capacity_bits() - self.bit_len
+    }
+
+    /// Exact bytes occupied by current logical word elements.
+    #[must_use]
+    pub fn logical_word_bytes(&self) -> usize {
+        self.words.len() * size_of::<u64>()
+    }
+
+    /// Exact bytes represented by the word vector's element capacity.
+    ///
+    /// Allocator bookkeeping and size-class rounding are intentionally absent.
+    #[must_use]
+    pub fn retained_word_bytes(&self) -> usize {
+        self.words.capacity() * size_of::<u64>()
+    }
+
+    /// Canonical packed words accumulated so far.
+    ///
+    /// Unused bits in the final word are always zero.
+    #[must_use]
+    pub fn as_words(&self) -> &[u64] {
+        &self.words
+    }
+
+    /// Fallibly appends one bit.
+    ///
+    /// A limit or allocation failure leaves the builder unchanged.
+    pub fn push(&mut self, bit: bool) -> Result<(), BitVectorError> {
+        self.extend(core::slice::from_ref(&bit))
+    }
+
+    /// Fallibly appends a complete bit slice.
+    ///
+    /// Length overflow, the explicit maximum, and any necessary allocation are
+    /// checked before the first word is changed. Chunking therefore cannot
+    /// change the canonical finished representation.
+    pub fn extend(&mut self, bits: &[bool]) -> Result<(), BitVectorError> {
+        let target_len = checked_appended_len(self.bit_len, bits.len(), self.max_bits)?;
+
+        let target_words = word_count(target_len);
+        if target_words > self.words.len() {
+            let additional_words = target_words - self.words.len();
+            self.words
+                .try_reserve_exact(additional_words)
+                .map_err(|_| BitVectorError::AllocationFailed {
+                    target: AllocationTarget::Words,
+                    requested: additional_words,
+                })?;
+            self.words.resize(target_words, 0);
+        }
+
+        for (offset, &bit) in bits.iter().enumerate() {
+            if bit {
+                let bit_index = self.bit_len + offset;
+                self.words[bit_index / WORD_BITS] |= 1_u64 << (bit_index % WORD_BITS);
+            }
+        }
+        self.bit_len = target_len;
+        Ok(())
+    }
+
+    /// Finishes the vector and fallibly constructs its rank directories.
+    ///
+    /// The packed word `Vec` is moved directly into the immutable vector: this
+    /// performs no clone, copy, shrink, or replacement allocation. Its exact
+    /// retained capacity remains visible through
+    /// [`SuccinctBitVector::retained_storage_breakdown`].
+    pub fn finish(self) -> Result<SuccinctBitVector, BitVectorError> {
+        SuccinctBitVector::try_from_words(self.bit_len, self.words)
     }
 }
 
@@ -474,6 +781,27 @@ impl FusedIterator for Ones<'_> {}
 
 fn word_count(bit_len: usize) -> usize {
     bit_len / WORD_BITS + usize::from(!bit_len.is_multiple_of(WORD_BITS))
+}
+
+fn checked_appended_len(
+    current_bits: usize,
+    additional_bits: usize,
+    max_bits: usize,
+) -> Result<usize, BitVectorError> {
+    let attempted_bits =
+        current_bits
+            .checked_add(additional_bits)
+            .ok_or(BitVectorError::LengthOverflow {
+                current_bits,
+                additional_bits,
+            })?;
+    if attempted_bits > max_bits {
+        return Err(BitVectorError::BitLimitExceeded {
+            attempted_bits,
+            max_bits,
+        });
+    }
+    Ok(attempted_bits)
 }
 
 fn validate_padding(bit_len: usize, words: &[u64]) -> Result<(), BitVectorError> {
@@ -582,6 +910,7 @@ mod tests {
                 word_bytes: 0,
                 rank_superblock_bytes: size_of::<usize>(),
                 rank_subblock_bytes: 0,
+                total_bytes: size_of::<usize>(),
             }
         );
     }
@@ -675,9 +1004,163 @@ mod tests {
             word_bytes: 9 * size_of::<u64>(),
             rank_superblock_bytes: 3 * size_of::<usize>(),
             rank_subblock_bytes: 9 * size_of::<u16>(),
+            total_bytes: 9 * size_of::<u64>() + 3 * size_of::<usize>() + 9 * size_of::<u16>(),
         };
         assert_eq!(vector.storage_breakdown(), expected);
         assert_eq!(vector.logical_storage_bytes(), expected.total_bytes());
+
+        let retained = vector.retained_storage_breakdown();
+        assert_eq!(
+            retained.word_bytes,
+            vector.words.capacity() * size_of::<u64>()
+        );
+        assert_eq!(
+            retained.rank_superblock_bytes,
+            vector.rank_superblocks.capacity() * size_of::<usize>()
+        );
+        assert_eq!(
+            retained.rank_subblock_bytes,
+            vector.rank_subblocks.capacity() * size_of::<u16>()
+        );
+        assert_eq!(vector.retained_storage_bytes(), retained.total_bytes());
+        assert!(vector.retained_storage_bytes() >= vector.logical_storage_bytes());
+    }
+
+    #[test]
+    fn builder_enforces_limit_atomically_at_bit_boundaries() {
+        let mut builder =
+            SuccinctBitVectorBuilder::try_with_capacity(65, 65).expect("builder reserves");
+        assert_eq!(builder.len(), 0);
+        assert!(builder.is_empty());
+        assert_eq!(builder.max_bits(), 65);
+        assert_eq!(builder.remaining_bits(), 65);
+        assert_eq!(builder.word_len(), 0);
+        assert!(builder.word_capacity() >= 2);
+        assert_eq!(builder.capacity_bits(), 65);
+        assert_eq!(builder.spare_capacity_bits(), 65);
+        assert_eq!(builder.logical_word_bytes(), 0);
+        assert_eq!(
+            builder.retained_word_bytes(),
+            builder.word_capacity() * size_of::<u64>()
+        );
+
+        let first_word = make_bits(64, |index| index % 3 == 0);
+        builder.extend(&first_word).expect("first word extends");
+        builder.push(true).expect("boundary bit appends");
+        assert_eq!(builder.len(), 65);
+        assert_eq!(builder.remaining_bits(), 0);
+        assert_eq!(builder.word_len(), 2);
+        assert_eq!(builder.logical_word_bytes(), 2 * size_of::<u64>());
+        assert_eq!(builder.as_words()[1], 1);
+
+        let before = builder.clone();
+        assert_eq!(
+            builder.push(false),
+            Err(BitVectorError::BitLimitExceeded {
+                attempted_bits: 66,
+                max_bits: 65,
+            })
+        );
+        assert_eq!(builder, before);
+
+        let vector = builder.finish().expect("builder finishes");
+        let mut expected = first_word;
+        expected.push(true);
+        assert_eq!(
+            vector,
+            SuccinctBitVector::try_from_bits(&expected).expect("reference constructs")
+        );
+    }
+
+    #[test]
+    fn builder_rejected_extend_does_not_partially_mutate() {
+        let mut builder = SuccinctBitVectorBuilder::new(5);
+        builder
+            .extend(&[true, false, true])
+            .expect("prefix extends");
+        let before = builder.clone();
+        assert_eq!(
+            builder.extend(&[false, true, false]),
+            Err(BitVectorError::BitLimitExceeded {
+                attempted_bits: 6,
+                max_bits: 5,
+            })
+        );
+        assert_eq!(builder, before);
+        assert_eq!(
+            SuccinctBitVectorBuilder::try_with_capacity(4, 5),
+            Err(BitVectorError::BitLimitExceeded {
+                attempted_bits: 5,
+                max_bits: 4,
+            })
+        );
+        assert_eq!(
+            checked_appended_len(usize::MAX, 1, usize::MAX),
+            Err(BitVectorError::LengthOverflow {
+                current_bits: usize::MAX,
+                additional_bits: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn builder_chunking_is_canonically_equivalent() {
+        for len in [0_usize, 1, 63, 64, 65, 511, 512, 513, 2_049] {
+            let bits = make_bits(len, |index| {
+                index == 0 || index + 1 == len || index % 7 == 2 || index % 127 == 64
+            });
+            let reference = SuccinctBitVector::try_from_bits(&bits).expect("reference constructs");
+
+            let mut pushed = SuccinctBitVectorBuilder::new(len);
+            for &bit in &bits {
+                pushed.push(bit).expect("single bit appends");
+            }
+            let pushed = pushed.finish().expect("pushed builder finishes");
+
+            let mut chunked = SuccinctBitVectorBuilder::try_with_capacity(len, len.min(65))
+                .expect("chunked builder reserves");
+            let chunk_sizes = [2_usize, 1, 63, 7, 129, 3, 64];
+            let mut start = 0_usize;
+            let mut chunk_index = 0_usize;
+            while start < bits.len() {
+                let end = start
+                    .saturating_add(chunk_sizes[chunk_index % chunk_sizes.len()])
+                    .min(bits.len());
+                chunked.extend(&bits[start..end]).expect("chunk appends");
+                let final_bits = chunked.len() % WORD_BITS;
+                if final_bits != 0 {
+                    let padding =
+                        chunked.as_words()[chunked.word_len() - 1] & !low_mask(final_bits);
+                    assert_eq!(padding, 0);
+                }
+                start = end;
+                chunk_index += 1;
+            }
+            let chunked = chunked.finish().expect("chunked builder finishes");
+
+            assert_eq!(pushed, reference, "push mismatch at length {len}");
+            assert_eq!(chunked, reference, "chunk mismatch at length {len}");
+        }
+    }
+
+    #[test]
+    fn builder_finish_reuses_word_allocation_and_capacity() {
+        let bits = make_bits(513, |index| index % 11 == 4);
+        let mut builder = SuccinctBitVectorBuilder::try_with_capacity(bits.len(), bits.len())
+            .expect("builder reserves");
+        builder.extend(&bits).expect("bits append");
+        let words_pointer = builder.words.as_ptr();
+        let words_capacity = builder.words.capacity();
+
+        let vector = builder.finish().expect("builder finishes");
+        assert_eq!(vector.words.as_ptr(), words_pointer);
+        assert_eq!(vector.words.capacity(), words_capacity);
+        assert_eq!(
+            vector.retained_storage_breakdown().word_bytes,
+            words_capacity * size_of::<u64>()
+        );
+        let reference = SuccinctBitVector::try_from_bits(&bits).expect("reference constructs");
+        assert_eq!(vector, reference);
     }
 
     #[test]
