@@ -20,9 +20,9 @@ SECOND="$EVIDENCE_DIR/second.txt"
 
 echo "==> verify the scalar codec crate has no outside direct dependencies"
 DIRECT_TREE="$(cargo tree --locked -p fgdb-codec --edges normal,dev,build --depth 1 --prefix none)"
-OUTSIDE_DIRECT="$(grep -vE '^(fgdb-|asupersync )' <<<"$DIRECT_TREE" || true)"
+OUTSIDE_DIRECT="$(grep -vE '^(fgdb-|asupersync |fnx-)' <<<"$DIRECT_TREE" || true)"
 if [[ -n "$OUTSIDE_DIRECT" ]]; then
-  echo "ERROR: fgdb-codec has a direct dependency outside fgdb/asupersync" >&2
+  echo "ERROR: fgdb-codec has a direct dependency outside fgdb/asupersync/fnx" >&2
   echo "$OUTSIDE_DIRECT" >&2
   exit 1
 fi
