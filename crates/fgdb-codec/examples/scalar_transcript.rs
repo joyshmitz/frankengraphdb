@@ -2,6 +2,7 @@ use std::{error::Error, fmt::Write as _};
 
 use fgdb_codec::{
     bitpack,
+    delta_varint::{self, EntryLimit as DeltaVarintEntryLimit},
     elias_fano::{EliasFano, EntryLimit},
     varint,
 };
@@ -29,6 +30,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     println!("uleb128 reject nonminimal: {nonminimal}");
 
+    let delta_values = [127, 127, 255, 16_384];
+    let delta_encoded = delta_varint::encode(&delta_values)?;
+    println!(
+        "delta_varint count=4: bytes={} decoded={:?}",
+        hex(&delta_encoded),
+        delta_varint::decode(
+            &delta_encoded,
+            delta_values.len(),
+            DeltaVarintEntryLimit::new(delta_values.len()),
+        )?
+    );
+    let decreasing_delta = match delta_varint::encode(&[8, 5]) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(unexpected_success(
+                "decreasing delta-varint input was accepted",
+            ));
+        }
+    };
+    println!("delta_varint reject decreasing: {decreasing_delta}");
+
     let packed_values = [0, 1, 2, 3, 4, 5, 30, 31];
     let packed = bitpack::encode(&packed_values, 5)?;
     println!(
@@ -53,11 +75,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let monotone = [0, 1, 1, 3, 5, 8, 13, 21, 34, 55];
     let ef = EliasFano::try_new(&monotone, EntryLimit::new(monotone.len()))?;
     println!(
-        "elias_fano count={} low_bits={} high_bits={} storage_words={}",
+        "elias_fano count={} low_bits={} high_bits={} logical_storage_words={}",
         ef.len(),
         ef.low_bits(),
         ef.high_bit_len(),
-        ef.storage_words()
+        ef.logical_storage_words()
     );
     let selected = ef
         .select(7)

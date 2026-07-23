@@ -9,5 +9,6 @@
 #![forbid(unsafe_code)]
 
 pub mod bitpack;
+pub mod delta_varint;
 pub mod elias_fano;
 pub mod varint;

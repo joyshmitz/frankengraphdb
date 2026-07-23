@@ -4,16 +4,16 @@
 //! durable byte format: registered format rows and generated readers will own
 //! framing, versioning, and per-kind limits. Construction requires an explicit
 //! [`EntryLimit`] and uses checked arithmetic before every internal allocation.
-//! Sparse samples avoid rescanning earlier one-bits, but this first scalar
-//! kernel does not yet carry the word/superblock directory needed to bound
-//! zero-word traversal across adversarial gaps; it therefore makes no O(1)
+//! A cumulative one-count per unary-high word locates `select` targets by
+//! binary search, so adversarial zero-word gaps are never traversed linearly.
+//! Scalar `select` is `O(log high_words)` with at most one word inspected after
+//! the directory search. Rank remains a binary search over `select`, and is
+//! therefore `O(log entries * log high_words)`; this module makes no O(1)
 //! rank/select claim.
 
 #![forbid(unsafe_code)]
 
 use core::fmt;
-
-const SELECT_SAMPLE_RATE: usize = 256;
 
 /// Maximum logical entries a caller permits one Elias-Fano value to own.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -40,8 +40,8 @@ pub enum AllocationTarget {
     LowBits,
     /// Unary high-bit words.
     HighBits,
-    /// Sparse positions used to avoid rescanning earlier one-bits.
-    SelectSamples,
+    /// Cumulative one-counts for unary high-bit words.
+    HighWordRanks,
 }
 
 /// Checked Elias-Fano construction failure.
@@ -88,8 +88,9 @@ pub enum SizeCalculation {
     HighBitCount,
     /// Converting a unary high-bit position to the platform index domain.
     HighBitPosition,
-    /// Computing the sparse select-directory length.
-    SelectSampleCount,
+    /// Converting the entry count into the high-word directory's `u32` rank
+    /// domain.
+    HighWordRank,
 }
 
 impl fmt::Display for EliasFanoError {
@@ -137,7 +138,7 @@ pub struct EliasFano {
     low_words: Vec<u64>,
     high_words: Vec<u64>,
     high_bit_len: usize,
-    select_samples: Vec<usize>,
+    high_word_ranks: Vec<u32>,
 }
 
 impl EliasFano {
@@ -169,13 +170,14 @@ impl EliasFano {
                 low_words: Vec::new(),
                 high_words: Vec::new(),
                 high_bit_len: 0,
-                select_samples: Vec::new(),
+                high_word_ranks: Vec::new(),
             });
         }
 
         let len_u64 = u64::try_from(values.len()).map_err(|_| EliasFanoError::SizeOverflow {
             calculation: SizeCalculation::EntryCount,
         })?;
+        let len_rank = checked_high_word_rank(values.len())?;
         let max_value = values[values.len() - 1];
         let ratio = max_value / len_u64;
         let low_bits = if ratio == 0 {
@@ -207,21 +209,8 @@ impl EliasFano {
         let high_word_count = words_for_bits(high_bit_len).ok_or(EliasFanoError::SizeOverflow {
             calculation: SizeCalculation::HighBitCount,
         })?;
-        let sample_count = values.len().checked_add(SELECT_SAMPLE_RATE - 1).ok_or(
-            EliasFanoError::SizeOverflow {
-                calculation: SizeCalculation::SelectSampleCount,
-            },
-        )? / SELECT_SAMPLE_RATE;
-
         let mut low_words = allocate_zeroed(low_word_count, AllocationTarget::LowBits)?;
         let mut high_words = allocate_zeroed(high_word_count, AllocationTarget::HighBits)?;
-        let mut select_samples = Vec::new();
-        select_samples
-            .try_reserve_exact(sample_count)
-            .map_err(|_| EliasFanoError::AllocationFailed {
-                target: AllocationTarget::SelectSamples,
-                requested: sample_count,
-            })?;
 
         let low_mask = low_mask(low_bits);
         for (index, &value) in values.iter().enumerate() {
@@ -245,12 +234,21 @@ impl EliasFano {
                 })?;
             debug_assert!(high_position < high_bit_len);
             high_words[high_position / 64] |= 1_u64 << (high_position % 64);
-            if index % SELECT_SAMPLE_RATE == 0 {
-                select_samples.push(high_position);
-            }
         }
 
-        debug_assert_eq!(select_samples.len(), sample_count);
+        let mut high_word_ranks =
+            allocate_zeroed_u32(high_word_count, AllocationTarget::HighWordRanks)?;
+        let mut cumulative_rank = 0_u32;
+        for (rank, &word) in high_word_ranks.iter_mut().zip(&high_words) {
+            cumulative_rank = cumulative_rank.checked_add(word.count_ones()).ok_or(
+                EliasFanoError::SizeOverflow {
+                    calculation: SizeCalculation::HighWordRank,
+                },
+            )?;
+            *rank = cumulative_rank;
+        }
+        debug_assert_eq!(cumulative_rank, len_rank);
+
         Ok(Self {
             len: values.len(),
             max_value,
@@ -258,7 +256,7 @@ impl EliasFano {
             low_words,
             high_words,
             high_bit_len,
-            select_samples,
+            high_word_ranks,
         })
     }
 
@@ -290,13 +288,15 @@ impl EliasFano {
         self.low_bits
     }
 
-    /// Total packed words, including the sparse select directory.
+    /// Total logical payload in equivalent 64-bit words, including the
+    /// high-word rank directory rounded up from its `u32` entries.
     ///
-    /// This is an accounting aid for tests and resource estimators, not a
-    /// durable encoding size.
+    /// This deliberately excludes vector capacities, struct metadata, and
+    /// allocator rounding. It is an encoding-density accounting aid, not a
+    /// retained-memory measurement or durable encoding size.
     #[must_use]
-    pub const fn storage_words(&self) -> usize {
-        self.low_words.len() + self.high_words.len() + self.select_samples.len()
+    pub const fn logical_storage_words(&self) -> usize {
+        self.low_words.len() + self.high_words.len() + self.high_word_ranks.len().div_ceil(2)
     }
 
     /// Logical number of bits in the unary high vector, excluding word padding.
@@ -306,6 +306,9 @@ impl EliasFano {
     }
 
     /// Returns the value at `index`, or `None` when out of bounds.
+    ///
+    /// Locating the unary-high word takes `O(log high_words)` directory
+    /// probes; selection inside that word examines at most 64 bits.
     #[must_use]
     pub fn select(&self, index: usize) -> Option<u64> {
         if index >= self.len {
@@ -325,12 +328,18 @@ impl EliasFano {
     }
 
     /// Counts represented values less than or equal to `value`.
+    ///
+    /// This is a binary search over [`Self::select`], not a constant-time rank
+    /// operation.
     #[must_use]
     pub fn rank_le(&self, value: u64) -> usize {
         self.partition_point(|candidate| candidate <= value)
     }
 
     /// Counts represented values strictly less than `value`.
+    ///
+    /// This is a binary search over [`Self::select`], not a constant-time rank
+    /// operation.
     #[must_use]
     pub fn rank_lt(&self, value: u64) -> usize {
         self.partition_point(|candidate| candidate < value)
@@ -369,34 +378,58 @@ impl EliasFano {
     }
 
     fn select_high_position(&self, index: usize) -> Option<usize> {
-        let sample_index = index / SELECT_SAMPLE_RATE;
-        let sample_value_index = sample_index * SELECT_SAMPLE_RATE;
-        let sample_position = *self.select_samples.get(sample_index)?;
-        let mut remaining = index - sample_value_index;
-        if remaining == 0 {
-            return Some(sample_position);
-        }
+        self.search_high_position(index).0
+    }
 
-        let mut word_index = sample_position / 64;
-        let sample_bit = sample_position % 64;
-        let mut bits = if sample_bit == 63 {
-            0
-        } else {
-            self.high_words[word_index] & (!0_u64 << (sample_bit + 1))
+    fn search_high_position(&self, index: usize) -> (Option<usize>, usize) {
+        if index >= self.len {
+            return (None, 0);
+        }
+        let Some(target_rank) = u32::try_from(index)
+            .ok()
+            .and_then(|rank| rank.checked_add(1))
+        else {
+            return (None, 0);
         };
 
-        loop {
-            let ones = bits.count_ones() as usize;
-            if remaining <= ones {
-                let within_word = select_one(bits, remaining - 1)?;
-                return word_index
-                    .checked_mul(64)
-                    .and_then(|base| base.checked_add(within_word));
+        let mut left = 0_usize;
+        let mut right = self.high_word_ranks.len();
+        let mut directory_probes = 0_usize;
+        while left < right {
+            let middle = left + (right - left) / 2;
+            directory_probes += 1;
+            if self.high_word_ranks[middle] < target_rank {
+                left = middle + 1;
+            } else {
+                right = middle;
             }
-            remaining -= ones;
-            word_index = word_index.checked_add(1)?;
-            bits = *self.high_words.get(word_index)?;
         }
+
+        let Some(&word) = self.high_words.get(left) else {
+            return (None, directory_probes);
+        };
+        let preceding_rank = if left == 0 {
+            0
+        } else {
+            self.high_word_ranks[left - 1]
+        };
+        let within_word_ordinal = preceding_rank
+            .checked_add(1)
+            .and_then(|first_rank| target_rank.checked_sub(first_rank))
+            .and_then(|ordinal| usize::try_from(ordinal).ok());
+        let position = within_word_ordinal
+            .and_then(|ordinal| select_one(word, ordinal))
+            .and_then(|within_word| {
+                left.checked_mul(64)
+                    .and_then(|base| base.checked_add(within_word))
+            });
+        (position, directory_probes)
+    }
+
+    #[cfg(test)]
+    fn select_directory_probes(&self, index: usize) -> Option<usize> {
+        let (position, probes) = self.search_high_position(index);
+        position.map(|_| probes)
     }
 
     fn read_low_bits(&self, index: usize) -> u64 {
@@ -420,6 +453,12 @@ fn words_for_bits(bits: usize) -> Option<usize> {
     complete.checked_add(usize::from(!bits.is_multiple_of(64)))
 }
 
+fn checked_high_word_rank(entries: usize) -> Result<u32, EliasFanoError> {
+    u32::try_from(entries).map_err(|_| EliasFanoError::SizeOverflow {
+        calculation: SizeCalculation::HighWordRank,
+    })
+}
+
 fn allocate_zeroed(count: usize, target: AllocationTarget) -> Result<Vec<u64>, EliasFanoError> {
     let mut words = Vec::new();
     words
@@ -430,6 +469,18 @@ fn allocate_zeroed(count: usize, target: AllocationTarget) -> Result<Vec<u64>, E
         })?;
     words.resize(count, 0);
     Ok(words)
+}
+
+fn allocate_zeroed_u32(count: usize, target: AllocationTarget) -> Result<Vec<u32>, EliasFanoError> {
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(count)
+        .map_err(|_| EliasFanoError::AllocationFailed {
+            target,
+            requested: count,
+        })?;
+    entries.resize(count, 0);
+    Ok(entries)
 }
 
 fn low_mask(bits: u8) -> u64 {
@@ -535,6 +586,14 @@ mod tests {
                 current: 2,
             })
         );
+
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            checked_high_word_rank(u32::MAX as usize + 1),
+            Err(EliasFanoError::SizeOverflow {
+                calculation: SizeCalculation::HighWordRank,
+            })
+        );
     }
 
     #[test]
@@ -542,12 +601,12 @@ mod tests {
         let singleton = EliasFano::try_new(&[u64::MAX], EntryLimit::new(1)).unwrap();
         assert_eq!(singleton.low_bits(), 63);
         assert_eq!(singleton.high_bit_len(), 2);
-        assert!(singleton.storage_words() <= 3);
+        assert!(singleton.logical_storage_words() <= 3);
 
         let extremes = EliasFano::try_new(&[0, u64::MAX], EntryLimit::new(2)).unwrap();
         assert_eq!(extremes.low_bits(), 62);
         assert_eq!(extremes.high_bit_len(), 5);
-        assert!(extremes.storage_words() <= 5);
+        assert!(extremes.logical_storage_words() <= 5);
         assert_eq!(extremes.select(1), Some(u64::MAX));
     }
 
@@ -596,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn select_directory_crosses_word_and_sample_boundaries() {
+    fn select_directory_crosses_word_and_rank_boundaries() {
         let values: Vec<u64> = (0..1_025_u64)
             .map(|index| index.saturating_mul(index / 3 + 1))
             .collect();
@@ -605,5 +664,39 @@ mod tests {
         for index in [0, 1, 63, 64, 127, 255, 256, 257, 511, 512, 1_024] {
             assert_eq!(encoded.select(index), values.get(index).copied());
         }
+    }
+
+    #[test]
+    fn select_directory_binary_searches_adversarial_zero_word_gap() {
+        let mut values = vec![u64::MAX; 4_097];
+        values[0] = 0;
+        let encoded = EliasFano::try_new(&values, EntryLimit::new(values.len())).unwrap();
+
+        let zero_word_gap = encoded
+            .high_words
+            .iter()
+            .skip(1)
+            .take_while(|&&word| word == 0)
+            .count();
+        assert!(
+            zero_word_gap >= 100,
+            "fixture must retain an adversarial gap"
+        );
+
+        let probes = encoded
+            .select_directory_probes(1)
+            .expect("second value has a select position");
+        assert_eq!(encoded.select(0), Some(0));
+        assert_eq!(encoded.select(1), Some(u64::MAX));
+        assert_eq!(encoded.select(values.len() - 1), Some(u64::MAX));
+        assert!(
+            probes <= 9,
+            "binary search over {} high words used {probes} probes",
+            encoded.high_words.len()
+        );
+        assert!(
+            probes < zero_word_gap,
+            "select must not inspect each of the {zero_word_gap} zero words"
+        );
     }
 }
