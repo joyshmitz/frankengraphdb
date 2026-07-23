@@ -65,16 +65,50 @@ pub trait KernelDispatch: private::Sealed {
 /// Construction is private to this module, and the dispatch traits are sealed.
 /// Evidence consumers can therefore read the bytes and path but cannot attach
 /// an arbitrary path label to unrelated bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct KernelOutput {
-    bytes: Vec<u8>,
+    bytes: KernelOutputBytes,
     dispatch_path: DispatchPath,
 }
+
+#[derive(Clone)]
+enum KernelOutputBytes {
+    Owned(Vec<u8>),
+    InlineVarint(varint::EncodedU64),
+}
+
+impl fmt::Debug for KernelOutput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KernelOutput")
+            .field("bytes", &self.as_bytes())
+            .field("dispatch_path", &self.dispatch_path)
+            .finish()
+    }
+}
+
+impl PartialEq for KernelOutput {
+    fn eq(&self, other: &Self) -> bool {
+        self.dispatch_path == other.dispatch_path && self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl Eq for KernelOutput {}
 
 impl KernelOutput {
     fn new<K: KernelDispatch + ?Sized>(kernel: &K, bytes: Vec<u8>) -> Self {
         Self {
-            bytes,
+            bytes: KernelOutputBytes::Owned(bytes),
+            dispatch_path: kernel.dispatch_path(),
+        }
+    }
+
+    fn new_inline_varint<K: KernelDispatch + ?Sized>(
+        kernel: &K,
+        bytes: varint::EncodedU64,
+    ) -> Self {
+        Self {
+            bytes: KernelOutputBytes::InlineVarint(bytes),
             dispatch_path: kernel.dispatch_path(),
         }
     }
@@ -82,19 +116,28 @@ impl KernelOutput {
     /// Exact bytes produced by the selected kernel path.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
+        match &self.bytes {
+            KernelOutputBytes::Owned(bytes) => bytes,
+            KernelOutputBytes::InlineVarint(bytes) => bytes.as_bytes(),
+        }
     }
 
     /// Exact output byte count.
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.bytes.len()
+        match &self.bytes {
+            KernelOutputBytes::Owned(bytes) => bytes.len(),
+            KernelOutputBytes::InlineVarint(bytes) => bytes.len(),
+        }
     }
 
     /// Whether the selected kernel produced no bytes.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
+        match &self.bytes {
+            KernelOutputBytes::Owned(bytes) => bytes.is_empty(),
+            KernelOutputBytes::InlineVarint(bytes) => bytes.is_empty(),
+        }
     }
 
     /// Dispatch path that produced these exact bytes.
@@ -106,7 +149,10 @@ impl KernelOutput {
     /// Consumes the provenance wrapper and returns the exact bytes.
     #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
-        self.bytes
+        match self.bytes {
+            KernelOutputBytes::Owned(bytes) => bytes,
+            KernelOutputBytes::InlineVarint(bytes) => bytes.as_bytes().to_vec(),
+        }
     }
 }
 
@@ -174,6 +220,12 @@ pub trait VarintKernel: KernelDispatch {
     /// Encodes one value into the allocation-free canonical representation.
     fn encode_varint(&self, value: u64) -> varint::EncodedU64;
 
+    /// Encodes one value inline and binds the exact bytes to this dispatch path.
+    ///
+    /// The returned output remains allocation-free unless the caller explicitly
+    /// converts it to a `Vec<u8>` with [`KernelOutput::into_bytes`].
+    fn encode_varint_output(&self, value: u64) -> KernelOutput;
+
     /// Writes one canonical value into caller-owned storage.
     fn write_varint(
         &self,
@@ -193,6 +245,13 @@ pub trait VarintKernel: KernelDispatch {
 pub trait BitpackKernel: KernelDispatch {
     /// Encodes fixed-width values into canonical bytes.
     fn encode(&self, values: &[u64], width: u8) -> Result<Vec<u8>, bitpack::BitpackError>;
+
+    /// Encodes fixed-width values and binds the exact bytes to this dispatch path.
+    fn encode_output(
+        &self,
+        values: &[u64],
+        width: u8,
+    ) -> Result<KernelOutput, bitpack::BitpackError>;
 
     /// Encodes fixed-width values into caller-owned storage.
     fn encode_into(
@@ -218,6 +277,14 @@ pub trait BitpackKernel: KernelDispatch {
         width: u8,
     ) -> Result<Vec<u8>, bitpack::BitpackError>;
 
+    /// Frame-of-reference encodes values and binds the exact bytes to this dispatch path.
+    fn encode_for_output(
+        &self,
+        values: &[u64],
+        base: u64,
+        width: u8,
+    ) -> Result<KernelOutput, bitpack::BitpackError>;
+
     /// Decodes frame-of-reference values relative to `base`.
     fn decode_for(
         &self,
@@ -235,6 +302,12 @@ pub trait DeltaVarintKernel: KernelDispatch {
         &self,
         values: &[u64],
     ) -> Result<Vec<u8>, delta_varint::DeltaVarintEncodeError>;
+
+    /// Encodes canonical deltas and binds the exact bytes to this dispatch path.
+    fn encode_delta_varint_output(
+        &self,
+        values: &[u64],
+    ) -> Result<KernelOutput, delta_varint::DeltaVarintEncodeError>;
 
     /// Decodes exactly `count` values under an explicit materialization bound.
     fn decode_delta_varint(
@@ -436,6 +509,10 @@ impl VarintKernel for ScalarKernels {
         varint::encode_u64(value)
     }
 
+    fn encode_varint_output(&self, value: u64) -> KernelOutput {
+        KernelOutput::new_inline_varint(self, varint::encode_u64(value))
+    }
+
     fn write_varint(
         &self,
         value: u64,
@@ -459,6 +536,14 @@ impl VarintKernel for ScalarKernels {
 impl BitpackKernel for ScalarKernels {
     fn encode(&self, values: &[u64], width: u8) -> Result<Vec<u8>, bitpack::BitpackError> {
         bitpack::encode(values, width)
+    }
+
+    fn encode_output(
+        &self,
+        values: &[u64],
+        width: u8,
+    ) -> Result<KernelOutput, bitpack::BitpackError> {
+        bitpack::encode(values, width).map(|bytes| KernelOutput::new(self, bytes))
     }
 
     fn encode_into(
@@ -488,6 +573,15 @@ impl BitpackKernel for ScalarKernels {
         bitpack::encode_for(values, base, width)
     }
 
+    fn encode_for_output(
+        &self,
+        values: &[u64],
+        base: u64,
+        width: u8,
+    ) -> Result<KernelOutput, bitpack::BitpackError> {
+        bitpack::encode_for(values, base, width).map(|bytes| KernelOutput::new(self, bytes))
+    }
+
     fn decode_for(
         &self,
         input: &[u8],
@@ -505,6 +599,13 @@ impl DeltaVarintKernel for ScalarKernels {
         values: &[u64],
     ) -> Result<Vec<u8>, delta_varint::DeltaVarintEncodeError> {
         delta_varint::encode(values)
+    }
+
+    fn encode_delta_varint_output(
+        &self,
+        values: &[u64],
+    ) -> Result<KernelOutput, delta_varint::DeltaVarintEncodeError> {
+        delta_varint::encode(values).map(|bytes| KernelOutput::new(self, bytes))
     }
 
     fn decode_delta_varint(
@@ -841,6 +942,21 @@ mod tests {
     }
 
     #[test]
+    fn varint_owned_output_matches_inline_bytes_and_path() {
+        for value in [0_u64, 127, 128, 16_384, u64::MAX] {
+            let raw = VarintKernel::encode_varint(&KERNELS, value);
+            let owned = VarintKernel::encode_varint_output(&KERNELS, value);
+            let heap_backed = KernelOutput::new(&KERNELS, raw.as_bytes().to_vec());
+            assert_eq!(owned.as_bytes(), raw.as_bytes());
+            assert_eq!(owned.len(), raw.len());
+            assert_eq!(owned.is_empty(), raw.is_empty());
+            assert_eq!(owned.dispatch_path(), DispatchPath::Scalar);
+            assert_eq!(owned, heap_backed);
+            assert_eq!(owned.into_bytes(), raw.as_bytes());
+        }
+    }
+
+    #[test]
     fn bitpack_trait_matches_direct_bytes_decode_and_errors() {
         let values = [3_u64, 0, 17, 31, 9];
         let direct = bitpack::encode(&values, 5);
@@ -873,6 +989,24 @@ mod tests {
     }
 
     #[test]
+    fn bitpack_owned_output_matches_raw_bytes_errors_and_path() {
+        let values = [3_u64, 0, 17, 31, 9];
+        let raw = BitpackKernel::encode(&KERNELS, &values, 5).expect("valid raw bitpack fixture");
+        let owned =
+            BitpackKernel::encode_output(&KERNELS, &values, 5).expect("valid bitpack fixture");
+        assert_eq!(owned.as_bytes(), raw.as_slice());
+        assert_eq!(owned.dispatch_path(), DispatchPath::Scalar);
+        assert_eq!(owned.into_bytes(), raw);
+
+        let invalid_values = [0_u64, 8];
+        assert_eq!(
+            BitpackKernel::encode_output(&KERNELS, &invalid_values, 3)
+                .map(KernelOutput::into_bytes),
+            BitpackKernel::encode(&KERNELS, &invalid_values, 3)
+        );
+    }
+
+    #[test]
     fn bitpack_trait_matches_direct_for_operations() {
         let values = [1_000_u64, 1_003, 1_007, 1_015];
         let direct = bitpack::encode_for(&values, 1_000, 4);
@@ -889,6 +1023,25 @@ mod tests {
         assert_eq!(
             BitpackKernel::encode_for(&KERNELS, &invalid_values, 1_000, 4),
             bitpack::encode_for(&invalid_values, 1_000, 4)
+        );
+    }
+
+    #[test]
+    fn bitpack_for_owned_output_matches_raw_bytes_errors_and_path() {
+        let values = [1_000_u64, 1_003, 1_007, 1_015];
+        let raw = BitpackKernel::encode_for(&KERNELS, &values, 1_000, 4)
+            .expect("valid raw frame-of-reference fixture");
+        let owned = BitpackKernel::encode_for_output(&KERNELS, &values, 1_000, 4)
+            .expect("valid frame-of-reference fixture");
+        assert_eq!(owned.as_bytes(), raw.as_slice());
+        assert_eq!(owned.dispatch_path(), DispatchPath::Scalar);
+        assert_eq!(owned.into_bytes(), raw);
+
+        let invalid_values = [999_u64];
+        assert_eq!(
+            BitpackKernel::encode_for_output(&KERNELS, &invalid_values, 1_000, 4)
+                .map(KernelOutput::into_bytes),
+            BitpackKernel::encode_for(&KERNELS, &invalid_values, 1_000, 4)
         );
     }
 
@@ -917,6 +1070,25 @@ mod tests {
         assert_eq!(
             DeltaVarintKernel::decode_delta_varint(&KERNELS, &encoded, values.len(), small_limit),
             delta_varint::decode(&encoded, values.len(), small_limit)
+        );
+    }
+
+    #[test]
+    fn delta_varint_owned_output_matches_raw_bytes_errors_and_path() {
+        let values = [7_u64, 7, 130, 65_536];
+        let raw = DeltaVarintKernel::encode_delta_varint(&KERNELS, &values)
+            .expect("valid raw delta-varint fixture");
+        let owned = DeltaVarintKernel::encode_delta_varint_output(&KERNELS, &values)
+            .expect("valid delta-varint fixture");
+        assert_eq!(owned.as_bytes(), raw.as_slice());
+        assert_eq!(owned.dispatch_path(), DispatchPath::Scalar);
+        assert_eq!(owned.into_bytes(), raw);
+
+        let decreasing = [4_u64, 3];
+        assert_eq!(
+            DeltaVarintKernel::encode_delta_varint_output(&KERNELS, &decreasing)
+                .map(KernelOutput::into_bytes),
+            DeltaVarintKernel::encode_delta_varint(&KERNELS, &decreasing)
         );
     }
 

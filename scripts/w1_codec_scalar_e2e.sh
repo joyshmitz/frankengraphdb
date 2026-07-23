@@ -2,12 +2,13 @@
 # Registry-independent scalar-kernel slice for fgdb-w1-codecs-3x8.
 #
 # This is deliberately narrower than the final codec_pipeline_e2e gate: codec
-# registry IDs, identity columns, durable framing, SIMD parity, dispatch-path
-# equivalence, and graph seal/scan/intersect remain on the parent Bead. This
-# gate covers the safe scalar primitives, NeighborCodec arms, roaring-like
-# containers, and deterministic block compression. Evidence is retained
-# because repository policy forbids automated deletion and the transcript is
-# useful for replay.
+# registry IDs, identity columns, durable framing, SIMD parity, cross-dispatch
+# equivalence, and production graph seal/scan/intersect remain on the parent
+# Bead. This gate covers the safe scalar kernel traits, NeighborCodec arms,
+# roaring-like containers, deterministic block compression, and provenance-
+# bound evidence for every byte encoder exercised by the transcript. Evidence
+# is retained because repository policy forbids automated deletion and the
+# transcript is useful for replay.
 
 set -euo pipefail
 
@@ -17,24 +18,61 @@ cd "$ROOT"
 EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fgdb-codec-scalar-e2e.XXXXXX")"
 FIRST="$EVIDENCE_DIR/first.txt"
 SECOND="$EVIDENCE_DIR/second.txt"
+EVIDENCE_ONLY="$EVIDENCE_DIR/evidence.ndjson"
 
 echo "==> verify the scalar codec crate has no outside direct dependencies"
-DIRECT_TREE="$(cargo tree --locked -p fgdb-codec --edges normal,dev,build --depth 1 --prefix none)"
-OUTSIDE_DIRECT="$(grep -vE '^(fgdb-|asupersync |fnx-)' <<<"$DIRECT_TREE" || true)"
-if [[ -n "$OUTSIDE_DIRECT" ]]; then
-  echo "ERROR: fgdb-codec has a direct dependency outside fgdb/asupersync/fnx" >&2
-  echo "$OUTSIDE_DIRECT" >&2
+DIRECT_METADATA="$(cargo metadata --locked --offline --no-deps --format-version 1 | jq -r '
+  .packages[]
+  | select(.name == "fgdb-codec")
+  | .dependencies[]
+  | [.name, (.kind // "normal"), (.source // "path"), (.path // "")]
+  | @tsv
+' | LC_ALL=C sort)"
+EXPECTED_DIRECT="$(
+  printf '%s\t%s\t%s\t%s\n' \
+    'asupersync' 'dev' 'git+https://github.com/Dicklesworthstone/asupersync?rev=e464a484cb65c1a55be0d9c925e6e9c20318edcb' '' \
+    'fgdb-types' 'normal' 'path' "$ROOT/crates/fgdb-types" \
+    'fnx-generators' 'dev' 'git+https://github.com/Dicklesworthstone/franken_networkx.git?rev=9d710b1c33e99412c94de7fa4de2f7ce4954110f' '' \
+    | LC_ALL=C sort
+)"
+if [[ "$DIRECT_METADATA" != "$EXPECTED_DIRECT" ]]; then
+  echo "ERROR: fgdb-codec direct dependency identities differ from the exact allowlist" >&2
+  diff -u <(printf '%s\n' "$EXPECTED_DIRECT") <(printf '%s\n' "$DIRECT_METADATA") >&2 || true
   exit 1
 fi
 
 echo "==> run every scalar codec test target"
-cargo test --locked -p fgdb-codec --all-targets
-cargo test --locked -p fgdb-codec --doc
+cargo test --locked --offline -p fgdb-codec --all-targets
+cargo test --locked --offline -p fgdb-codec --doc
 
 echo "==> reproduce the scalar codec transcript twice"
-cargo run --locked --quiet -p fgdb-codec --example scalar_transcript >"$FIRST"
-cargo run --locked --quiet -p fgdb-codec --example scalar_transcript >"$SECOND"
+cargo run --locked --offline --quiet -p fgdb-codec --example scalar_transcript >"$FIRST"
+cargo run --locked --offline --quiet -p fgdb-codec --example scalar_transcript >"$SECOND"
 cmp "$FIRST" "$SECOND"
+
+echo "==> validate provenance-bound scalar evidence rows"
+grep '^{"codec_id":' "$FIRST" >"$EVIDENCE_ONLY"
+if [[ "$(wc -l <"$EVIDENCE_ONLY")" -ne 5 ]]; then
+  echo "ERROR: expected exactly five scalar encoder evidence rows" >&2
+  exit 1
+fi
+EVIDENCE_PATTERN='^\{"codec_id":"[^"]+","corpus_id":"[^"]+","entry_count":[0-9]+,"encoded_bytes":[0-9]+,"bytes_per_entry":(\{"numerator":[0-9]+,"denominator":[1-9][0-9]*\}|null),"dispatch_path":"scalar","output_checksum":\{"algorithm":"fnv1a64-output-evidence-v1","hex":"[0-9a-f]{16}"\}\}$'
+if grep -Ev "$EVIDENCE_PATTERN" "$EVIDENCE_ONLY"; then
+  echo "ERROR: scalar encoder evidence row violated the frozen field contract" >&2
+  exit 1
+fi
+for CODEC_ID in \
+  uleb128-scalar-diagnostic \
+  delta-varint-scalar-diagnostic \
+  block-scalar-diagnostic \
+  bitpack-scalar-diagnostic \
+  for-bitpack-scalar-diagnostic
+do
+  if [[ "$(grep -c "\"codec_id\":\"$CODEC_ID\"" "$EVIDENCE_ONLY")" -ne 1 ]]; then
+    echo "ERROR: expected one evidence row for $CODEC_ID" >&2
+    exit 1
+  fi
+done
 
 echo "==> assert canonical encodings and typed rejection paths"
 grep -q "uleb128 max: ffffffffffffffffff01" "$FIRST"
