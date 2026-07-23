@@ -3,12 +3,13 @@
 #
 # This is intentionally NOT the final codec_pipeline_e2e gate. It proves a
 # deterministic fnx-generators Barabasi-Albert fixture, all three explicit
-# scalar NeighborCodec arms, graph-bound multi-prefix VId/EId columns, and a
-# diagnostic stable-ID adjacency transcript through scalar block/scan mechanics
-# inside a pinned asupersync lab root task. It does not claim a production
-# seal/run layout, codec chaos/cancellation coverage, durable framing, registered
-# IDs, logical digests, SIMD parity, OriginBirthOrder, delta/FOR identity slots,
-# or final graph-codec coverage.
+# scalar NeighborCodec arms, bounded pairwise logical-equivalence checks,
+# graph-bound multi-prefix FOR VId/EId columns, and a diagnostic stable-ID
+# adjacency transcript through scalar block/scan mechanics inside a pinned
+# asupersync lab root task. It does not claim a production seal/run layout,
+# codec chaos/cancellation coverage, durable framing, registered IDs, a durable
+# logical digest, SIMD parity, OriginBirthOrder, delta-coded identity slots, or
+# final graph-codec coverage.
 #
 # Evidence directories are retained: repository policy forbids automated file
 # deletion, and the two complete transcripts are useful replay artifacts.
@@ -75,29 +76,30 @@ if [[ "$(grep -c '"codec_id":"block-scalar-diagnostic-transcript"' "$EVIDENCE_ON
   echo "ERROR: the diagnostic adjacency transcript needs one block byte-evidence row" >&2
   exit 1
 fi
-if [[ "$(grep -c '"codec_id":"identity-shared-prefix-fixed-scalar-payload-diagnostic"' "$EVIDENCE_ONLY")" -ne 2 ]]; then
+if [[ "$(grep -c '"codec_id":"identity-shared-prefix-for-scalar-payload-diagnostic"' "$EVIDENCE_ONLY")" -ne 2 ]]; then
   echo "ERROR: expected exact scalar-payload evidence for both graph VIds and EIds" >&2
   exit 1
 fi
-grep -q '"corpus_id":"ba64-vertex-ids","entry_count":64,"encoded_bytes":481,"bytes_per_entry":{"numerator":481,"denominator":64}' "$EVIDENCE_ONLY"
-grep -q '"corpus_id":"ba64-edge-ids","entry_count":183,"encoded_bytes":1314,"bytes_per_entry":{"numerator":438,"denominator":61}' "$EVIDENCE_ONLY"
+grep -q '"corpus_id":"ba64-vertex-ids","entry_count":64,"encoded_bytes":144,"bytes_per_entry":{"numerator":9,"denominator":4}' "$EVIDENCE_ONLY"
+grep -q '"corpus_id":"ba64-edge-ids","entry_count":183,"encoded_bytes":361,"bytes_per_entry":{"numerator":361,"denominator":183}' "$EVIDENCE_ONLY"
 
 echo "==> validate the one explicit partial-scope summary and omissions"
 if [[ "$(grep -c '^{"kind":"scope-summary"' "$FIRST")" -ne 1 ]]; then
   echo "ERROR: expected exactly one scope-summary row" >&2
   exit 1
 fi
-grep -q '"proof":"scalar-graph-codec-pipeline-v1"' "$FIRST"
+grep -q '"proof":"scalar-graph-codec-pipeline-v2"' "$FIRST"
 grep -q '"scope":"registry-independent-partial-e2e"' "$FIRST"
 grep -q '"fixture":"barabasi-albert-n64-m3-seed424242"' "$FIRST"
 grep -q '"nodes":64,"edges":183,"adjacency_entries":366' "$FIRST"
 grep -q '"neighbor_arms_per_list":3,"stream_evidence_rows":64' "$FIRST"
+grep -q '"neighbor_equivalence_checks":576' "$FIRST"
 grep -q '"identity_payload_evidence_rows":2' "$FIRST"
 grep -q '"vertex_identity_rows":64,"edge_identity_rows":183' "$FIRST"
 grep -q '"vertex_identity_prefixes":3,"edge_identity_prefixes":3' "$FIRST"
 grep -q '"lab_scope":"root-task-lifecycle-only"' "$FIRST"
 grep -q '"lab_quiescent":true,"lab_oracles_passed":true' "$FIRST"
-grep -q '"omissions":\["durable-framing","registered-ids","logical-digest","simd-parity","origin-birth-order","delta-for","production-seal-run","lab-chaos-cancellation","final-codec-pipeline-e2e"\]' "$FIRST"
+grep -q '"omissions":\["durable-framing","registered-ids","logical-digest","simd-parity","origin-birth-order","identity-delta","production-seal-run","lab-chaos-cancellation","final-codec-pipeline-e2e"\]' "$FIRST"
 if [[ "$(wc -l <"$FIRST")" -ne 68 ]]; then
   echo "ERROR: transcript must contain only 67 evidence rows and one summary" >&2
   exit 1

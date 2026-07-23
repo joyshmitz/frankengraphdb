@@ -1,13 +1,13 @@
 //! Honest registry-independent scalar graph-codec pipeline proof.
 //!
 //! This example deliberately proves only the mechanics that exist today:
-//! deterministic graph generation, all three explicit neighbor arms,
-//! type-safe scalar identity columns tied to that graph, a canonical diagnostic
-//! adjacency transcript, scalar block round-trip/scan, and execution inside an
-//! asupersync lab root task.
+//! deterministic graph generation, all three explicit neighbor arms, bounded
+//! cross-arm logical-equivalence checks, type-safe scalar FOR identity columns
+//! tied to that graph, a canonical diagnostic adjacency transcript, scalar
+//! block round-trip/scan, and execution inside an asupersync lab root task.
 //!
 //! It is **not** evidence for durable framing, registered codec IDs, a logical
-//! digest, SIMD parity, `OriginBirthOrder`, delta/FOR identity slots, or the
+//! digest, SIMD parity, `OriginBirthOrder`, delta-coded identity slots, or the
 //! production seal/run layout, codec-specific chaos/cancellation behavior, or
 //! the final `codec_pipeline_e2e` gate. Elias-Fano and dense intervals expose
 //! no encoded byte slice, so this proof emits no invented byte evidence for
@@ -95,6 +95,7 @@ struct DiagnosticScan {
 struct PipelineOutput {
     evidence_rows: String,
     stream_rows: usize,
+    neighbor_equivalence_checks: usize,
     identities: StableFixtureIds,
     scan: DiagnosticScan,
     transcript_decoded_bytes: usize,
@@ -140,11 +141,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let summary = format!(
         concat!(
             "{{\"kind\":\"scope-summary\",",
-            "\"proof\":\"scalar-graph-codec-pipeline-v1\",",
+            "\"proof\":\"scalar-graph-codec-pipeline-v2\",",
             "\"scope\":\"registry-independent-partial-e2e\",",
             "\"fixture\":\"{}\",",
             "\"nodes\":{},\"edges\":{},\"adjacency_entries\":{},",
             "\"neighbor_arms_per_list\":3,\"stream_evidence_rows\":{},",
+            "\"neighbor_equivalence_checks\":{},",
             "\"identity_payload_evidence_rows\":2,",
             "\"vertex_identity_rows\":{},\"edge_identity_rows\":{},",
             "\"vertex_identity_prefixes\":{},\"edge_identity_prefixes\":{},",
@@ -153,7 +155,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "\"lab_quiescent\":true,\"lab_oracles_passed\":true,",
             "\"omissions\":[",
             "\"durable-framing\",\"registered-ids\",\"logical-digest\",",
-            "\"simd-parity\",\"origin-birth-order\",\"delta-for\",",
+            "\"simd-parity\",\"origin-birth-order\",\"identity-delta\",",
             "\"production-seal-run\",\"lab-chaos-cancellation\",",
             "\"final-codec-pipeline-e2e\"]}}\n"
         ),
@@ -162,6 +164,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         pipeline.scan.edges,
         pipeline.scan.adjacency_entries,
         pipeline.stream_rows,
+        pipeline.neighbor_equivalence_checks,
         pipeline.identities.vertices.len(),
         pipeline.identities.edges.len(),
         pipeline.identities.vertex_prefixes,
@@ -214,19 +217,20 @@ fn run_pipeline() -> Result<PipelineOutput, ProofError> {
     // Run all neighbor codecs and every cross-arm intersection from the rows
     // recovered by the transcript scan, preserving the requested cycle order.
     let mut evidence_rows = String::new();
-    let encoded = encode_and_verify_neighbors(&scan.adjacency, &mut evidence_rows, &kernels)?;
+    let (encoded, neighbor_equivalence_checks) =
+        encode_and_verify_neighbors(&scan.adjacency, &mut evidence_rows, &kernels)?;
     verify_all_intersections(&encoded, &kernels)?;
 
     append_evidence_row(
         &mut evidence_rows,
-        "identity-shared-prefix-fixed-scalar-payload-diagnostic",
+        "identity-shared-prefix-for-scalar-payload-diagnostic",
         "ba64-vertex-ids",
         identities.vertices.len(),
         &identities.vertex_payload,
     )?;
     append_evidence_row(
         &mut evidence_rows,
-        "identity-shared-prefix-fixed-scalar-payload-diagnostic",
+        "identity-shared-prefix-for-scalar-payload-diagnostic",
         "ba64-edge-ids",
         identities.edges.len(),
         &identities.edge_payload,
@@ -243,6 +247,7 @@ fn run_pipeline() -> Result<PipelineOutput, ProofError> {
     Ok(PipelineOutput {
         evidence_rows,
         stream_rows: NODE_COUNT,
+        neighbor_equivalence_checks,
         identities,
         scan,
         transcript_decoded_bytes: decompressed.len(),
@@ -322,15 +327,16 @@ fn encode_and_verify_neighbors(
     adjacency: &[Vec<u64>],
     evidence_rows: &mut String,
     kernels: &ScalarKernels,
-) -> Result<Vec<EncodedAdjacency>, ProofError> {
+) -> Result<(Vec<EncodedAdjacency>, usize), ProofError> {
     let mut encoded = Vec::new();
+    let mut equivalence_checks = 0_usize;
     encoded
         .try_reserve_exact(adjacency.len())
         .map_err(|_| ProofError::new("could not reserve encoded adjacency rows"))?;
 
     for (node, values) in adjacency.iter().enumerate() {
         let limit = EntryLimit::new(values.len());
-        let arms = [
+        let [elias_fano, stream_vbyte, dense_intervals] = [
             NeighborKernel::build_neighbors(kernels, NeighborCodec::EliasFano, values, limit),
             NeighborKernel::build_neighbors(kernels, NeighborCodec::StreamVByte, values, limit),
             NeighborKernel::build_neighbors(kernels, NeighborCodec::DenseIntervals, values, limit),
@@ -340,7 +346,7 @@ fn encode_and_verify_neighbors(
                 ProofError::new(format!("node {node} neighbor encoding failed: {error}"))
             })
         });
-        let arms = [arms[0].clone()?, arms[1].clone()?, arms[2].clone()?];
+        let arms = [elias_fano?, stream_vbyte?, dense_intervals?];
         let actual_codecs = [arms[0].codec(), arms[1].codec(), arms[2].codec()];
         let expected_codecs = [
             NeighborCodec::EliasFano,
@@ -355,6 +361,22 @@ fn encode_and_verify_neighbors(
 
         for arm in &arms {
             verify_select_and_rank(node, values, arm, kernels)?;
+        }
+        for left in &arms {
+            for right in &arms {
+                NeighborKernel::verify_neighbor_logical_equivalence(kernels, left, right).map_err(
+                    |error| {
+                        ProofError::new(format!(
+                            "node {node} {:?} x {:?} logical equivalence failed: {error}",
+                            left.codec(),
+                            right.codec()
+                        ))
+                    },
+                )?;
+                equivalence_checks = equivalence_checks.checked_add(1).ok_or_else(|| {
+                    ProofError::new("neighbor logical-equivalence check count overflowed")
+                })?;
+            }
         }
         let stream_accounting = match &arms[1] {
             EncodedNeighbors::StreamVByte(stream) => {
@@ -388,7 +410,7 @@ fn encode_and_verify_neighbors(
             arms,
         });
     }
-    Ok(encoded)
+    Ok((encoded, equivalence_checks))
 }
 
 fn verify_select_and_rank(
@@ -489,15 +511,22 @@ fn verify_identity_columns(
     let edge_ids = stable_edges.iter().map(|edge| edge.id).collect::<Vec<_>>();
     let vertex_limits = IdentityColumnLimits::new(vertex_ids.len(), 8, 4_096);
     let edge_limits = IdentityColumnLimits::new(edge_ids.len(), 8, 4_096);
-    let vertices =
-        IdentityColumnKernel::build_sorted_identity_column(kernels, &vertex_ids, vertex_limits)
-            .map_err(|error| ProofError::new(format!("VId column failed: {error}")))?;
-    let edges = IdentityColumnKernel::build_sorted_identity_column(kernels, &edge_ids, edge_limits)
-        .map_err(|error| ProofError::new(format!("EId column failed: {error}")))?;
+    let vertices = IdentityColumnKernel::build_sorted_identity_column_with_for_slots(
+        kernels,
+        &vertex_ids,
+        vertex_limits,
+    )
+    .map_err(|error| ProofError::new(format!("VId FOR column failed: {error}")))?;
+    let edges = IdentityColumnKernel::build_sorted_identity_column_with_for_slots(
+        kernels,
+        &edge_ids,
+        edge_limits,
+    )
+    .map_err(|error| ProofError::new(format!("EId FOR column failed: {error}")))?;
 
     verify_vertex_lower_bounds(&vertices, &vertex_ids, kernels)?;
     verify_edge_lower_bounds(&edges, &edge_ids, kernels)?;
-    let vertex_prefixes = verify_shared_identity_column(
+    let vertex_prefixes = verify_for_identity_column(
         "VId",
         vertices.as_column().representation(),
         vertices
@@ -505,7 +534,7 @@ fn verify_identity_columns(
             .prefix_dictionary()
             .map_or(0, <[fgdb_codec::identity::IdentityPrefix]>::len),
     )?;
-    let edge_prefixes = verify_shared_identity_column(
+    let edge_prefixes = verify_for_identity_column(
         "EId",
         edges.as_column().representation(),
         edges
@@ -681,14 +710,14 @@ fn verify_edge_lower_bounds(
     Ok(())
 }
 
-fn verify_shared_identity_column(
+fn verify_for_identity_column(
     type_name: &str,
     representation: IdentityRepresentation,
     prefix_count: usize,
 ) -> Result<usize, ProofError> {
-    if representation != IdentityRepresentation::SharedPrefixFixed {
+    if representation != IdentityRepresentation::SharedPrefixFor {
         return Err(ProofError::new(format!(
-            "{type_name} fixture did not select shared-prefix storage"
+            "{type_name} fixture did not select shared-prefix FOR storage"
         )));
     }
     if prefix_count < 2 {

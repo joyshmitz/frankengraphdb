@@ -401,6 +401,16 @@ pub trait NeighborKernel: KernelDispatch {
         limit: neighbor::EntryLimit,
     ) -> Result<Vec<u64>, neighbor::NeighborError>;
 
+    /// Verifies exact logical neighbor equality across representation arms.
+    ///
+    /// This is a bounded, registry-independent value comparison rather than a
+    /// durable logical digest or a visibility/security proof.
+    fn verify_neighbor_logical_equivalence(
+        &self,
+        left: &neighbor::EncodedNeighbors,
+        right: &neighbor::EncodedNeighbors,
+    ) -> Result<(), neighbor::NeighborEquivalenceError>;
+
     /// Encodes complete StreamVByte payload/fence accounting for diagnostics.
     ///
     /// This versionless transcript is not a durable codec envelope. The
@@ -427,6 +437,17 @@ pub trait IdentityColumnKernel: KernelDispatch {
 
     /// Constructs an identity column after validating monotone row order.
     fn build_sorted_identity_column<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError>;
+
+    /// Constructs a sorted identity column and explicitly admits FOR-packed
+    /// monotone-slot suffixes when they win the scalar size chooser.
+    ///
+    /// This remains registry-independent: the selected payload has no durable
+    /// representation tag, framing, counts, checksum, or codec identifier.
+    fn build_sorted_identity_column_with_for_slots<T: identity::ElementIdentity>(
         &self,
         values: &[T],
         limits: identity::IdentityColumnLimits,
@@ -720,6 +741,14 @@ impl NeighborKernel for ScalarKernels {
         left.intersection(right, limit)
     }
 
+    fn verify_neighbor_logical_equivalence(
+        &self,
+        left: &neighbor::EncodedNeighbors,
+        right: &neighbor::EncodedNeighbors,
+    ) -> Result<(), neighbor::NeighborEquivalenceError> {
+        left.verify_logical_equivalence(right)
+    }
+
     fn stream_vbyte_accounting_output(
         &self,
         stream: &neighbor::StreamVByteNeighbors,
@@ -745,6 +774,14 @@ impl IdentityColumnKernel for ScalarKernels {
         limits: identity::IdentityColumnLimits,
     ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError> {
         identity::SortedIdentityColumn::try_new(values, limits)
+    }
+
+    fn build_sorted_identity_column_with_for_slots<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError> {
+        identity::SortedIdentityColumn::try_new_with_for_slots(values, limits)
     }
 
     fn identity_at<T: identity::ElementIdentity>(
@@ -1273,6 +1310,14 @@ mod tests {
             NeighborKernel::neighbors_intersection(&KERNELS, &left, &right, limit),
             left.intersection(&right, limit)
         );
+        assert_eq!(
+            NeighborKernel::verify_neighbor_logical_equivalence(&KERNELS, &left, &left),
+            left.verify_logical_equivalence(&left)
+        );
+        assert_eq!(
+            NeighborKernel::verify_neighbor_logical_equivalence(&KERNELS, &left, &right),
+            left.verify_logical_equivalence(&right)
+        );
         let too_small = neighbor::EntryLimit::new(1);
         assert_eq!(
             NeighborKernel::neighbors_intersection(&KERNELS, &left, &right, too_small),
@@ -1364,6 +1409,118 @@ mod tests {
         assert_eq!(
             IdentityColumnKernel::build_sorted_identity_column(&KERNELS, &arbitrary, limits),
             identity::SortedIdentityColumn::try_new(&arbitrary, limits)
+        );
+    }
+
+    #[test]
+    fn identity_for_slot_trait_matches_direct_representation_payload_errors_and_path() {
+        fn vid(epoch: u64, partition: u32, slot: u64) -> VId {
+            VId(identity::IdentityParts::try_new(epoch, partition, slot)
+                .expect("valid identity fixture")
+                .pack())
+        }
+
+        let values = (0..256).map(|slot| vid(3, 5, slot)).collect::<Vec<_>>();
+        let limits = identity::IdentityColumnLimits::new(values.len(), 1, usize::MAX);
+
+        let fixed = IdentityColumnKernel::build_sorted_identity_column(&KERNELS, &values, limits)
+            .expect("fixed-only sorted identity construction");
+        assert_eq!(
+            fixed.as_column().representation(),
+            identity::IdentityRepresentation::SharedPrefixFixed
+        );
+
+        let direct = identity::SortedIdentityColumn::try_new_with_for_slots(&values, limits)
+            .expect("direct FOR-slot construction");
+        let dispatched = IdentityColumnKernel::build_sorted_identity_column_with_for_slots(
+            &KERNELS, &values, limits,
+        )
+        .expect("dispatched FOR-slot construction");
+        assert_eq!(dispatched, direct);
+        assert_eq!(
+            dispatched.as_column().representation(),
+            identity::IdentityRepresentation::SharedPrefixFor
+        );
+
+        let payload_len = direct.as_column().encoded_payload_len();
+        let direct_payload = direct
+            .as_column()
+            .try_scalar_payload(payload_len)
+            .expect("direct bounded scalar payload");
+        let dispatched_payload = IdentityColumnKernel::encode_identity_payload(
+            &KERNELS,
+            dispatched.as_column(),
+            payload_len,
+        )
+        .expect("provenance-bound scalar payload");
+        assert_eq!(dispatched_payload.as_bytes(), direct_payload);
+        assert_eq!(dispatched_payload.len(), payload_len);
+        assert_eq!(dispatched_payload.dispatch_path(), DispatchPath::Scalar);
+        assert_eq!(dispatched_payload.into_bytes(), direct_payload);
+
+        let too_small_payload = payload_len - 1;
+        assert_eq!(
+            IdentityColumnKernel::encode_identity_payload(
+                &KERNELS,
+                dispatched.as_column(),
+                too_small_payload,
+            )
+            .map(KernelOutput::into_bytes),
+            direct.as_column().try_scalar_payload(too_small_payload)
+        );
+
+        let representation_limit =
+            identity::IdentityColumnLimits::new(values.len(), 1, payload_len - 1);
+        let representation_error = Err(identity::IdentityColumnError::PayloadLimitExceeded {
+            representation: identity::IdentityRepresentation::SharedPrefixFor,
+            required: payload_len,
+            limit: payload_len - 1,
+        });
+        assert_eq!(
+            IdentityColumnKernel::build_sorted_identity_column_with_for_slots(
+                &KERNELS,
+                &values,
+                representation_limit,
+            ),
+            representation_error
+        );
+        assert_eq!(
+            identity::SortedIdentityColumn::try_new_with_for_slots(&values, representation_limit),
+            representation_error
+        );
+
+        let unsorted = [vid(1, 0, 2), vid(1, 0, 1)];
+        let row_limit = identity::IdentityColumnLimits::new(1, 1, usize::MAX);
+        let row_limit_error =
+            Err(identity::IdentityColumnError::RowLimitExceeded { rows: 2, limit: 1 });
+        assert_eq!(
+            IdentityColumnKernel::build_sorted_identity_column_with_for_slots(
+                &KERNELS, &unsorted, row_limit,
+            ),
+            row_limit_error
+        );
+        assert_eq!(
+            identity::SortedIdentityColumn::try_new_with_for_slots(&unsorted, row_limit),
+            row_limit_error
+        );
+
+        let sorted_limit = identity::IdentityColumnLimits::new(2, 1, usize::MAX);
+        let sorted_error = Err(identity::IdentityColumnError::NotSorted {
+            index: 1,
+            previous: unsorted[0].0.to_be_bytes(),
+            current: unsorted[1].0.to_be_bytes(),
+        });
+        assert_eq!(
+            IdentityColumnKernel::build_sorted_identity_column_with_for_slots(
+                &KERNELS,
+                &unsorted,
+                sorted_limit,
+            ),
+            sorted_error
+        );
+        assert_eq!(
+            identity::SortedIdentityColumn::try_new_with_for_slots(&unsorted, sorted_limit),
+            sorted_error
         );
     }
 

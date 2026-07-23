@@ -260,6 +260,46 @@ pub enum NeighborError {
     },
 }
 
+/// Input side named by a logical-equivalence verification failure.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum NeighborEquivalenceSide {
+    /// The receiver passed to
+    /// [`EncodedNeighbors::verify_logical_equivalence`].
+    Left,
+    /// The `other` representation passed to
+    /// [`EncodedNeighbors::verify_logical_equivalence`].
+    Right,
+}
+
+/// Failure while comparing the logical values of two neighbor representations.
+///
+/// This error describes an in-memory, registry-independent comparison. It is
+/// not a durable digest, a codec-identity check, or evidence about graph
+/// visibility or authorization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NeighborEquivalenceError {
+    /// The representations differ at their first unequal logical position.
+    ValueMismatch {
+        /// Zero-based logical position of the first difference.
+        index: usize,
+        /// Value from the left representation, or `None` if it ended.
+        left: Option<u64>,
+        /// Value from the right representation, or `None` if it ended.
+        right: Option<u64>,
+    },
+    /// A representation failed to produce an in-range logical value.
+    Internal {
+        /// Representation side that failed.
+        side: NeighborEquivalenceSide,
+        /// Explicit in-memory representation arm that failed.
+        codec: NeighborCodec,
+        /// Logical position being read when the failure occurred.
+        index: usize,
+        /// Typed private-representation failure.
+        source: NeighborError,
+    },
+}
+
 impl fmt::Display for NeighborError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -305,6 +345,28 @@ impl fmt::Display for NeighborError {
     }
 }
 
+impl fmt::Display for NeighborEquivalenceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::ValueMismatch { index, left, right } => write!(
+                formatter,
+                "neighbor representations first differ at index {index}: \
+                 left={left:?}, right={right:?}"
+            ),
+            Self::Internal {
+                side,
+                codec,
+                index,
+                source,
+            } => write!(
+                formatter,
+                "{side:?} {codec:?} neighbor representation failed at index \
+                 {index}: {source}"
+            ),
+        }
+    }
+}
+
 impl std::error::Error for NeighborError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -316,6 +378,15 @@ impl std::error::Error for NeighborError {
             | Self::MalformedStream { .. }
             | Self::IntersectionLimitExceeded { .. }
             | Self::InternalValueMissing { .. } => None,
+        }
+    }
+}
+
+impl std::error::Error for NeighborEquivalenceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Internal { source, .. } => Some(source),
+            Self::ValueMismatch { .. } => None,
         }
     }
 }
@@ -1209,6 +1280,22 @@ impl EncodedNeighbors {
             Self::DenseIntervals(values) => values.intersection(other, limit),
         }
     }
+
+    /// Verifies that two explicit representations contain exactly the same
+    /// sorted stable neighbor values.
+    ///
+    /// The comparison ignores the representation arms and does not allocate a
+    /// complete decoded list. Each side retains at most one fixed-size scalar
+    /// cursor buffer; consequently, a StreamVByte input decodes each visited
+    /// block at most once. The first value or length difference is returned
+    /// with its logical position.
+    ///
+    /// This is a registry-independent in-memory verifier. It does not define a
+    /// durable codec identifier or logical digest, and it makes no claim about
+    /// graph visibility or authorization.
+    pub fn verify_logical_equivalence(&self, other: &Self) -> Result<(), NeighborEquivalenceError> {
+        verify_neighbor_sequences(self, other)
+    }
 }
 
 trait SortedNeighbors {
@@ -1272,12 +1359,7 @@ impl SortedNeighbors for StreamVByteNeighbors {
         let block_index = start / STREAM_BLOCK_ENTRIES;
         let block_start = block_index * STREAM_BLOCK_ENTRIES;
         let within_block = start - block_start;
-        let count = self.decode_block_into(block_index, output).map_err(|_| {
-            NeighborError::InternalValueMissing {
-                codec: self.codec(),
-                index: start,
-            }
-        })?;
+        let count = self.decode_block_into(block_index, output)?;
         if within_block >= count {
             return Err(NeighborError::InternalValueMissing {
                 codec: self.codec(),
@@ -1445,6 +1527,48 @@ impl<'a, S: SortedNeighbors> SequenceCursor<'a, S> {
         debug_assert!(self.buffer_index < self.buffer_len);
         self.logical_index += 1;
         self.buffer_index += 1;
+    }
+}
+
+fn verify_neighbor_sequences<L: SortedNeighbors, R: SortedNeighbors>(
+    left: &L,
+    right: &R,
+) -> Result<(), NeighborEquivalenceError> {
+    let mut left_cursor = SequenceCursor::new(left);
+    let mut right_cursor = SequenceCursor::new(right);
+    let mut index = 0_usize;
+
+    loop {
+        let left_value =
+            left_cursor
+                .current()
+                .map_err(|source| NeighborEquivalenceError::Internal {
+                    side: NeighborEquivalenceSide::Left,
+                    codec: left.sequence_codec(),
+                    index,
+                    source,
+                })?;
+        let right_value =
+            right_cursor
+                .current()
+                .map_err(|source| NeighborEquivalenceError::Internal {
+                    side: NeighborEquivalenceSide::Right,
+                    codec: right.sequence_codec(),
+                    index,
+                    source,
+                })?;
+
+        match (left_value, right_value) {
+            (None, None) => return Ok(()),
+            (Some(left), Some(right)) if left == right => {
+                left_cursor.advance();
+                right_cursor.advance();
+                index = left_cursor.logical_index;
+            }
+            (left, right) => {
+                return Err(NeighborEquivalenceError::ValueMismatch { index, left, right });
+            }
+        }
     }
 }
 
@@ -1654,6 +1778,28 @@ mod tests {
         ]
     }
 
+    fn assert_cross_arm_equivalent(values: &[u64]) {
+        let encoded = encodings(values);
+        for left in &encoded {
+            for right in &encoded {
+                assert_eq!(
+                    left.verify_logical_equivalence(right),
+                    Ok(()),
+                    "{:?} x {:?}",
+                    left.codec(),
+                    right.codec()
+                );
+            }
+        }
+    }
+
+    fn next_deterministic_random(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
     fn assert_matches_naive(values: &[u64]) {
         for encoded in encodings(values) {
             assert_eq!(encoded.len(), values.len());
@@ -1734,6 +1880,163 @@ mod tests {
                 .collect();
             assert_matches_naive(&values);
         }
+    }
+
+    #[test]
+    fn logical_equivalence_is_exhaustive_across_small_cross_arm_subsets() {
+        for mask in 0_u16..(1 << 10) {
+            let values: Vec<u64> = (0..10)
+                .filter(|bit| mask & (1 << bit) != 0)
+                .map(|bit| bit as u64)
+                .collect();
+            assert_cross_arm_equivalent(&values);
+        }
+    }
+
+    #[test]
+    fn logical_equivalence_matches_deterministic_randomized_cross_arm_inputs() {
+        let mut state = 0x0ddc_0ffe_e15e_baad_u64;
+        for case in 0..128 {
+            let len = usize::try_from(
+                next_deterministic_random(&mut state)
+                    % u64::try_from(3 * STREAM_BLOCK_ENTRIES + 19).unwrap(),
+            )
+            .unwrap();
+            let mut values = Vec::with_capacity(len);
+            let mut value = next_deterministic_random(&mut state) % 97;
+            for index in 0..len {
+                if index != 0 {
+                    value = value
+                        .checked_add(next_deterministic_random(&mut state) % 1_009 + 1)
+                        .unwrap();
+                }
+                values.push(value);
+            }
+            assert_cross_arm_equivalent(&values);
+            assert_eq!(values.len(), len, "randomized case {case}");
+        }
+    }
+
+    #[test]
+    fn logical_equivalence_reports_first_value_and_length_mismatches() {
+        let left = encodings(&[2, 4, 6, 8]);
+        let right = encodings(&[2, 4, 7, 8]);
+        for left_encoding in &left {
+            for right_encoding in &right {
+                assert_eq!(
+                    left_encoding.verify_logical_equivalence(right_encoding),
+                    Err(NeighborEquivalenceError::ValueMismatch {
+                        index: 2,
+                        left: Some(6),
+                        right: Some(7),
+                    }),
+                    "{:?} x {:?}",
+                    left_encoding.codec(),
+                    right_encoding.codec()
+                );
+            }
+        }
+
+        let short = EncodedNeighbors::try_stream_vbyte(&[2, 4], EntryLimit::new(2)).unwrap();
+        let long = EncodedNeighbors::try_dense_intervals(&[2, 4, 6], EntryLimit::new(3)).unwrap();
+        assert_eq!(
+            short.verify_logical_equivalence(&long),
+            Err(NeighborEquivalenceError::ValueMismatch {
+                index: 2,
+                left: None,
+                right: Some(6),
+            })
+        );
+        assert_eq!(
+            long.verify_logical_equivalence(&short),
+            Err(NeighborEquivalenceError::ValueMismatch {
+                index: 2,
+                left: Some(6),
+                right: None,
+            })
+        );
+    }
+
+    #[test]
+    fn logical_equivalence_preserves_typed_internal_representation_failures() {
+        let mut malformed = StreamVByteNeighbors::try_new(&[7, 11], EntryLimit::new(2)).unwrap();
+        malformed.fences[0].entry_count = 0;
+        let malformed = EncodedNeighbors::StreamVByte(malformed);
+        let valid = EncodedNeighbors::try_dense_intervals(&[7, 11], EntryLimit::new(2)).unwrap();
+
+        assert!(matches!(
+            malformed.verify_logical_equivalence(&valid),
+            Err(NeighborEquivalenceError::Internal {
+                side: NeighborEquivalenceSide::Left,
+                codec: NeighborCodec::StreamVByte,
+                index: 0,
+                source: NeighborError::MalformedStream {
+                    cause: MalformedStream::InvalidEntryCount { actual: 0 },
+                    ..
+                },
+            })
+        ));
+        assert!(matches!(
+            valid.verify_logical_equivalence(&malformed),
+            Err(NeighborEquivalenceError::Internal {
+                side: NeighborEquivalenceSide::Right,
+                codec: NeighborCodec::StreamVByte,
+                index: 0,
+                source: NeighborError::MalformedStream {
+                    cause: MalformedStream::InvalidEntryCount { actual: 0 },
+                    ..
+                },
+            })
+        ));
+    }
+
+    #[test]
+    fn logical_equivalence_decodes_each_visited_stream_block_once_per_side() {
+        let values: Vec<u64> = (0..(3 * STREAM_BLOCK_ENTRIES + 17))
+            .map(|value| (value as u64) * 2)
+            .collect();
+        let left =
+            EncodedNeighbors::try_stream_vbyte(&values, EntryLimit::new(values.len())).unwrap();
+        let right =
+            EncodedNeighbors::try_stream_vbyte(&values, EntryLimit::new(values.len())).unwrap();
+        let block_count = values.len().div_ceil(STREAM_BLOCK_ENTRIES);
+
+        reset_stream_block_decode_attempts();
+        assert_eq!(left.verify_logical_equivalence(&right), Ok(()));
+        assert_eq!(
+            stream_block_decode_attempts(),
+            2 * block_count,
+            "each complete input must decode each block exactly once"
+        );
+
+        let dense =
+            EncodedNeighbors::try_dense_intervals(&values, EntryLimit::new(values.len())).unwrap();
+        reset_stream_block_decode_attempts();
+        assert_eq!(left.verify_logical_equivalence(&dense), Ok(()));
+        assert_eq!(
+            stream_block_decode_attempts(),
+            block_count,
+            "the single StreamVByte input must decode each block exactly once"
+        );
+
+        let mut changed = values.clone();
+        changed[STREAM_BLOCK_ENTRIES + 7] += 1;
+        let changed =
+            EncodedNeighbors::try_stream_vbyte(&changed, EntryLimit::new(changed.len())).unwrap();
+        reset_stream_block_decode_attempts();
+        assert_eq!(
+            left.verify_logical_equivalence(&changed),
+            Err(NeighborEquivalenceError::ValueMismatch {
+                index: STREAM_BLOCK_ENTRIES + 7,
+                left: Some(2 * (STREAM_BLOCK_ENTRIES as u64 + 7)),
+                right: Some(2 * (STREAM_BLOCK_ENTRIES as u64 + 7) + 1),
+            })
+        );
+        assert_eq!(
+            stream_block_decode_attempts(),
+            4,
+            "a second-block mismatch must decode only two blocks per side"
+        );
     }
 
     #[test]
