@@ -22,12 +22,32 @@ use core::hash::Hasher;
 use fgdb_collections::hash_table::SeededHasher;
 
 const HASH_DOMAIN: &[u8] = b"fgdb:bottom-k:observation:v1";
+const CANONICAL_MAGIC: [u8; 8] = *b"FGDBBTK1";
+const CANONICAL_VERSION: u16 = 1;
+const CANONICAL_HEADER_BYTES: usize = 8 + 2 + 1 + (6 * 8);
+const CANONICAL_SAMPLE_HEADER_BYTES: usize = 2 * 8;
+
+/// Stable hash algorithm named by a bottom-k profile.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(u8)]
+pub enum BottomKHashAlgorithm {
+    /// Domain-separated [`SeededHasher`] stream frozen by canonical vectors.
+    SeededHasherV1 = 1,
+}
+
+impl BottomKHashAlgorithm {
+    const fn canonical_tag(self) -> u8 {
+        self as u8
+    }
+}
 
 /// Complete behavior, hash, and resource profile for a bottom-k sketch.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BottomKProfile {
     /// Maximum number of distinct samples retained.
     pub k: usize,
+    /// Stable hash algorithm included in profile identity.
+    pub hash_algorithm: BottomKHashAlgorithm,
     /// Explicit deterministic seed for the stable hash.
     pub seed: u64,
     /// Maximum accepted length of one canonical observation.
@@ -47,7 +67,43 @@ impl BottomKProfile {
     ) -> Self {
         Self {
             k,
+            hash_algorithm: BottomKHashAlgorithm::SeededHasherV1,
             seed,
+            max_observation_bytes,
+            max_sample_bytes,
+        }
+    }
+}
+
+/// Caller-owned admission bounds for decoding one bottom-k value.
+///
+/// These bounds are independent of the profile embedded in untrusted bytes.
+/// In particular, `max_samples` caps the profile's `k` even when the encoded
+/// sample is empty.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct BottomKDecodeLimits {
+    /// Maximum accepted canonical value length.
+    pub max_encoded_bytes: usize,
+    /// Maximum accepted profile `k` and retained sample count.
+    pub max_samples: usize,
+    /// Maximum accepted per-observation profile ceiling and payload length.
+    pub max_observation_bytes: usize,
+    /// Maximum accepted profile and retained sample byte total.
+    pub max_sample_bytes: usize,
+}
+
+impl BottomKDecodeLimits {
+    /// Creates explicit caller-owned decode admission bounds.
+    #[must_use]
+    pub const fn new(
+        max_encoded_bytes: usize,
+        max_samples: usize,
+        max_observation_bytes: usize,
+        max_sample_bytes: usize,
+    ) -> Self {
+        Self {
+            max_encoded_bytes,
+            max_samples,
             max_observation_bytes,
             max_sample_bytes,
         }
@@ -88,6 +144,8 @@ pub enum BottomKError {
     },
     /// Checked payload-size arithmetic overflowed.
     SampleByteCountOverflow,
+    /// Checked sample-directory size arithmetic overflowed.
+    SampleCountOverflow,
     /// The allocator rejected a checked reservation.
     AllocationFailed {
         /// Component whose reservation failed.
@@ -119,6 +177,7 @@ impl fmt::Display for BottomKError {
             Self::SampleByteCountOverflow => {
                 formatter.write_str("bottom-k sample byte count overflowed")
             }
+            Self::SampleCountOverflow => formatter.write_str("bottom-k sample count overflowed"),
             Self::AllocationFailed { target, requested } => write!(
                 formatter,
                 "could not reserve {requested} units for bottom-k {target:?}"
@@ -135,6 +194,129 @@ impl fmt::Display for BottomKError {
 }
 
 impl std::error::Error for BottomKError {}
+
+/// Caller-owned resource checked while admitting canonical bottom-k bytes.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum BottomKDecodeResource {
+    /// Total canonical input bytes.
+    EncodedBytes,
+    /// Profile `k` or retained directory entries.
+    Samples,
+    /// Per-observation profile ceiling or one retained payload.
+    ObservationBytes,
+    /// Profile or retained aggregate payload bytes.
+    SampleBytes,
+}
+
+/// Strict canonical-codec failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BottomKCodecError {
+    /// The in-memory or decoded sketch violates a construction invariant.
+    State(BottomKError),
+    /// A platform-sized profile or state field cannot be represented canonically.
+    IntegerUnrepresentable,
+    /// Computing the exact canonical value length overflowed.
+    LengthOverflow,
+    /// The allocator rejected the exact canonical byte reservation.
+    AllocationFailed {
+        /// Requested byte count.
+        requested: usize,
+    },
+    /// The eight-byte format discriminator did not match.
+    MagicMismatch {
+        /// Bytes found at the canonical magic position.
+        actual: [u8; 8],
+    },
+    /// The format version is not implemented.
+    UnsupportedVersion {
+        /// Version found in the input.
+        actual: u16,
+    },
+    /// The encoded hash-algorithm discriminator is not implemented.
+    UnsupportedHashAlgorithm {
+        /// Discriminator found in the canonical profile.
+        actual: u8,
+    },
+    /// The encoded complete profile does not equal the trusted expected profile.
+    ProfileMismatch {
+        /// Trusted profile supplied by the caller.
+        expected: BottomKProfile,
+        /// Profile decoded from the canonical header.
+        actual: BottomKProfile,
+    },
+    /// A caller-owned decode admission bound was exceeded.
+    DecodeLimitExceeded {
+        /// Resource whose admission bound was exceeded.
+        resource: BottomKDecodeResource,
+        /// Encoded profile, state, or input value.
+        actual: usize,
+        /// Caller-owned maximum.
+        maximum: usize,
+    },
+    /// Input ended before a complete field or payload could be read.
+    Truncated {
+        /// Byte offset of the field or payload.
+        offset: usize,
+        /// Bytes needed at that offset.
+        needed: usize,
+        /// Bytes remaining at the offset.
+        remaining: usize,
+    },
+    /// The retained sample count exceeds the encoded profile's `k`.
+    SampleCountExceedsProfile {
+        /// Encoded retained sample count.
+        actual: usize,
+        /// Encoded profile ceiling.
+        maximum: usize,
+    },
+    /// The encoded or in-memory byte total disagrees with the sample payloads.
+    SampleByteCountMismatch {
+        /// Declared byte total.
+        declared: usize,
+        /// Sum of retained observation lengths.
+        actual: usize,
+    },
+    /// A retained hash is not the profile hash of its observation.
+    HashMismatch {
+        /// Zero-based sample index.
+        index: usize,
+        /// Hash stored in the canonical state.
+        actual: u64,
+        /// Hash derived from the complete profile and observation.
+        expected: u64,
+    },
+    /// A retained sample repeats its predecessor.
+    DuplicateSample {
+        /// Zero-based index of the repeated sample.
+        index: usize,
+    },
+    /// Retained samples are not strictly increasing by `(hash, bytes)`.
+    SamplesOutOfOrder {
+        /// Zero-based index of the first out-of-order sample.
+        index: usize,
+    },
+    /// Input contains bytes after the one canonical value.
+    TrailingBytes {
+        /// First trailing byte.
+        offset: usize,
+        /// Number of trailing bytes.
+        remaining: usize,
+    },
+}
+
+impl fmt::Display for BottomKCodecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for BottomKCodecError {}
+
+impl From<BottomKError> for BottomKCodecError {
+    fn from(error: BottomKError) -> Self {
+        Self::State(error)
+    }
+}
 
 /// One canonical retained sample.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -191,20 +373,14 @@ pub struct BottomKSketch {
 }
 
 impl BottomKSketch {
-    /// Creates an empty sketch after fallibly reserving its bounded directory.
+    /// Creates an empty sketch without allocating its potentially large directory.
     pub fn try_new(profile: BottomKProfile) -> Result<Self, BottomKError> {
         if profile.k == 0 {
             return Err(BottomKError::EmptySampleSize);
         }
-        let mut samples = Vec::new();
-        reserve_samples(
-            &mut samples,
-            profile.k,
-            BottomKAllocationTarget::SampleDirectory,
-        )?;
         Ok(Self {
             profile,
-            samples,
+            samples: Vec::new(),
             sample_bytes: 0,
         })
     }
@@ -249,6 +425,82 @@ impl BottomKSketch {
         }
     }
 
+    /// Encodes the complete profile and logical state into one canonical value.
+    ///
+    /// The representation uses fixed-width big-endian profile and state fields,
+    /// followed by strictly sorted `(hash, observation length, observation)`
+    /// records. Equal logical states therefore produce byte-identical values
+    /// without relying on host word size.
+    pub fn try_to_canonical_bytes(&self) -> Result<Vec<u8>, BottomKCodecError> {
+        let layout = validate_canonical_state(self.profile, self.sample_bytes, &self.samples)?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(layout.encoded_len).map_err(|_| {
+            BottomKCodecError::AllocationFailed {
+                requested: layout.encoded_len,
+            }
+        })?;
+        bytes.extend_from_slice(&CANONICAL_MAGIC);
+        push_u16(&mut bytes, CANONICAL_VERSION);
+        bytes.push(self.profile.hash_algorithm.canonical_tag());
+        push_u64(&mut bytes, layout.k);
+        push_u64(&mut bytes, self.profile.seed);
+        push_u64(&mut bytes, layout.max_observation_bytes);
+        push_u64(&mut bytes, layout.max_sample_bytes);
+        push_u64(&mut bytes, layout.sample_bytes);
+        push_u64(&mut bytes, layout.sample_count);
+        for sample in &self.samples {
+            push_u64(&mut bytes, sample.hash);
+            push_u64(&mut bytes, canonical_usize(sample.observation.len())?);
+            bytes.extend_from_slice(&sample.observation);
+        }
+        debug_assert_eq!(bytes.len(), layout.encoded_len);
+        Ok(bytes)
+    }
+
+    /// Decodes exactly one strict canonical value and revalidates every law.
+    ///
+    /// The complete header, exact encoded length, profile bounds, hashes,
+    /// strict ordering, distinctness, and payload totals are validated in an
+    /// allocation-free preflight. Only then are the bounded sample directory
+    /// and observation payloads allocated.
+    pub fn try_from_canonical_bytes(
+        bytes: &[u8],
+        expected_profile: BottomKProfile,
+        limits: BottomKDecodeLimits,
+    ) -> Result<Self, BottomKCodecError> {
+        let header = preflight_canonical_bytes(bytes, expected_profile, limits)?;
+
+        let mut samples = Vec::new();
+        reserve_samples(
+            &mut samples,
+            header.sample_count,
+            BottomKAllocationTarget::SampleDirectory,
+        )?;
+        let mut decoder = BottomKDecoder {
+            bytes,
+            offset: CANONICAL_HEADER_BYTES,
+        };
+        for _ in 0..header.sample_count {
+            let hash = decoder.read_u64()?;
+            let observation_bytes = decoded_usize(decoder.read_u64()?)?;
+            let observation = decoder.take(observation_bytes)?;
+            samples.push(try_clone_sample(
+                hash,
+                observation,
+                BottomKAllocationTarget::ObservationBytes,
+            )?);
+        }
+        decoder.finish()?;
+
+        let sketch = Self {
+            profile: header.profile,
+            samples,
+            sample_bytes: header.sample_bytes,
+        };
+        validate_canonical_state(sketch.profile, sketch.sample_bytes, &sketch.samples)?;
+        Ok(sketch)
+    }
+
     /// Largest retained sample, or `None` while empty.
     #[must_use]
     pub fn threshold(&self) -> Option<&BottomKSample> {
@@ -258,7 +510,7 @@ impl BottomKSketch {
     /// Computes this profile's stable hash for a bounded observation.
     pub fn try_hash(&self, observation: &[u8]) -> Result<u64, BottomKError> {
         self.validate_observation(observation)?;
-        Ok(stable_hash(self.profile.seed, observation))
+        stable_hash(self.profile.hash_algorithm, self.profile.seed, observation)
     }
 
     /// Returns whether the canonical observation is currently retained.
@@ -274,7 +526,7 @@ impl BottomKSketch {
     /// is checked before the state changes.
     pub fn try_observe(&mut self, observation: &[u8]) -> Result<(), BottomKError> {
         self.validate_observation(observation)?;
-        let hash = stable_hash(self.profile.seed, observation);
+        let hash = stable_hash(self.profile.hash_algorithm, self.profile.seed, observation)?;
         let insertion_index = match self.find(hash, observation) {
             Ok(_) => return Ok(()),
             Err(index) => index,
@@ -334,9 +586,15 @@ impl BottomKSketch {
         }
 
         let mut merged = Vec::new();
+        let merged_capacity = self
+            .samples
+            .len()
+            .checked_add(other.samples.len())
+            .ok_or(BottomKError::SampleCountOverflow)?
+            .min(self.profile.k);
         reserve_samples(
             &mut merged,
-            self.profile.k,
+            merged_capacity,
             BottomKAllocationTarget::MergeDirectory,
         )?;
         let mut merged_bytes = 0_usize;
@@ -402,7 +660,7 @@ impl BottomKSketch {
     /// mutates the sketch.
     pub fn try_remove(&mut self, observation: &[u8]) -> Result<(), BottomKError> {
         self.validate_observation(observation)?;
-        let hash = stable_hash(self.profile.seed, observation);
+        let hash = stable_hash(self.profile.hash_algorithm, self.profile.seed, observation)?;
         let Ok(index) = self.find(hash, observation) else {
             return Ok(());
         };
@@ -438,12 +696,395 @@ impl BottomKSketch {
     }
 }
 
-fn stable_hash(seed: u64, observation: &[u8]) -> u64 {
-    let mut hasher = SeededHasher::new(seed);
-    hasher.write(HASH_DOMAIN);
-    hasher.write_u64(observation.len() as u64);
-    hasher.write(observation);
-    hasher.finish()
+struct CanonicalBottomKLayout {
+    k: u64,
+    max_observation_bytes: u64,
+    max_sample_bytes: u64,
+    sample_bytes: u64,
+    sample_count: u64,
+    encoded_len: usize,
+}
+
+struct DecodedBottomKHeader {
+    profile: BottomKProfile,
+    sample_bytes: usize,
+    sample_count: usize,
+}
+
+fn validate_canonical_state(
+    profile: BottomKProfile,
+    sample_bytes: usize,
+    samples: &[BottomKSample],
+) -> Result<CanonicalBottomKLayout, BottomKCodecError> {
+    if profile.k == 0 {
+        return Err(BottomKError::EmptySampleSize.into());
+    }
+    if samples.len() > profile.k {
+        return Err(BottomKCodecError::SampleCountExceedsProfile {
+            actual: samples.len(),
+            maximum: profile.k,
+        });
+    }
+    if sample_bytes > profile.max_sample_bytes {
+        return Err(BottomKError::SampleByteLimitExceeded {
+            requested: sample_bytes,
+            maximum: profile.max_sample_bytes,
+        }
+        .into());
+    }
+
+    let mut actual_sample_bytes = 0_usize;
+    let mut encoded_len = expected_canonical_len(samples.len(), 0)?;
+    let mut previous: Option<(u64, &[u8])> = None;
+    for (index, sample) in samples.iter().enumerate() {
+        let observation = sample.observation.as_slice();
+        if observation.len() > profile.max_observation_bytes {
+            return Err(BottomKError::ObservationTooLarge {
+                bytes: observation.len(),
+                maximum: profile.max_observation_bytes,
+            }
+            .into());
+        }
+        actual_sample_bytes = actual_sample_bytes
+            .checked_add(observation.len())
+            .ok_or(BottomKError::SampleByteCountOverflow)?;
+        if actual_sample_bytes > profile.max_sample_bytes {
+            return Err(BottomKError::SampleByteLimitExceeded {
+                requested: actual_sample_bytes,
+                maximum: profile.max_sample_bytes,
+            }
+            .into());
+        }
+        let expected_hash = stable_hash(profile.hash_algorithm, profile.seed, observation)?;
+        if sample.hash != expected_hash {
+            return Err(BottomKCodecError::HashMismatch {
+                index,
+                actual: sample.hash,
+                expected: expected_hash,
+            });
+        }
+        validate_sample_successor(previous, sample.hash, observation, index)?;
+        previous = Some((sample.hash, observation));
+        canonical_usize(observation.len())?;
+        encoded_len = encoded_len
+            .checked_add(observation.len())
+            .ok_or(BottomKCodecError::LengthOverflow)?;
+    }
+    if sample_bytes != actual_sample_bytes {
+        return Err(BottomKCodecError::SampleByteCountMismatch {
+            declared: sample_bytes,
+            actual: actual_sample_bytes,
+        });
+    }
+
+    Ok(CanonicalBottomKLayout {
+        k: canonical_usize(profile.k)?,
+        max_observation_bytes: canonical_usize(profile.max_observation_bytes)?,
+        max_sample_bytes: canonical_usize(profile.max_sample_bytes)?,
+        sample_bytes: canonical_usize(sample_bytes)?,
+        sample_count: canonical_usize(samples.len())?,
+        encoded_len,
+    })
+}
+
+fn preflight_canonical_bytes(
+    bytes: &[u8],
+    expected_profile: BottomKProfile,
+    limits: BottomKDecodeLimits,
+) -> Result<DecodedBottomKHeader, BottomKCodecError> {
+    enforce_decode_limit(
+        BottomKDecodeResource::EncodedBytes,
+        bytes.len(),
+        limits.max_encoded_bytes,
+    )?;
+    let mut decoder = BottomKDecoder::new(bytes);
+    let magic = decoder.read_array::<8>()?;
+    if magic != CANONICAL_MAGIC {
+        return Err(BottomKCodecError::MagicMismatch { actual: magic });
+    }
+    let version = decoder.read_u16()?;
+    if version != CANONICAL_VERSION {
+        return Err(BottomKCodecError::UnsupportedVersion { actual: version });
+    }
+    let hash_algorithm = decode_hash_algorithm(decoder.read_u8()?)?;
+
+    let k = decoded_usize(decoder.read_u64()?)?;
+    let seed = decoder.read_u64()?;
+    let max_observation_bytes = decoded_usize(decoder.read_u64()?)?;
+    let max_sample_bytes = decoded_usize(decoder.read_u64()?)?;
+    let sample_bytes = decoded_usize(decoder.read_u64()?)?;
+    let sample_count = decoded_usize(decoder.read_u64()?)?;
+    let profile = BottomKProfile {
+        k,
+        hash_algorithm,
+        seed,
+        max_observation_bytes,
+        max_sample_bytes,
+    };
+
+    if profile != expected_profile {
+        return Err(BottomKCodecError::ProfileMismatch {
+            expected: expected_profile,
+            actual: profile,
+        });
+    }
+    enforce_decode_limit(
+        BottomKDecodeResource::Samples,
+        profile.k,
+        limits.max_samples,
+    )?;
+    enforce_decode_limit(
+        BottomKDecodeResource::ObservationBytes,
+        profile.max_observation_bytes,
+        limits.max_observation_bytes,
+    )?;
+    enforce_decode_limit(
+        BottomKDecodeResource::SampleBytes,
+        profile.max_sample_bytes,
+        limits.max_sample_bytes,
+    )?;
+    if profile.k == 0 {
+        return Err(BottomKError::EmptySampleSize.into());
+    }
+    if sample_count > profile.k {
+        return Err(BottomKCodecError::SampleCountExceedsProfile {
+            actual: sample_count,
+            maximum: profile.k,
+        });
+    }
+    if sample_bytes > profile.max_sample_bytes {
+        return Err(BottomKError::SampleByteLimitExceeded {
+            requested: sample_bytes,
+            maximum: profile.max_sample_bytes,
+        }
+        .into());
+    }
+    enforce_decode_limit(
+        BottomKDecodeResource::Samples,
+        sample_count,
+        limits.max_samples,
+    )?;
+    enforce_decode_limit(
+        BottomKDecodeResource::SampleBytes,
+        sample_bytes,
+        limits.max_sample_bytes,
+    )?;
+
+    let expected_len = expected_canonical_len(sample_count, sample_bytes)?;
+    if bytes.len() < expected_len {
+        return Err(BottomKCodecError::Truncated {
+            offset: CANONICAL_HEADER_BYTES,
+            needed: expected_len - CANONICAL_HEADER_BYTES,
+            remaining: bytes.len().saturating_sub(CANONICAL_HEADER_BYTES),
+        });
+    }
+    if bytes.len() > expected_len {
+        return Err(BottomKCodecError::TrailingBytes {
+            offset: expected_len,
+            remaining: bytes.len() - expected_len,
+        });
+    }
+
+    let mut actual_sample_bytes = 0_usize;
+    let mut previous: Option<(u64, &[u8])> = None;
+    for index in 0..sample_count {
+        let hash = decoder.read_u64()?;
+        let observation_bytes = decoded_usize(decoder.read_u64()?)?;
+        if observation_bytes > profile.max_observation_bytes {
+            return Err(BottomKError::ObservationTooLarge {
+                bytes: observation_bytes,
+                maximum: profile.max_observation_bytes,
+            }
+            .into());
+        }
+        enforce_decode_limit(
+            BottomKDecodeResource::ObservationBytes,
+            observation_bytes,
+            limits.max_observation_bytes,
+        )?;
+        let observation = decoder.take(observation_bytes)?;
+        actual_sample_bytes = actual_sample_bytes
+            .checked_add(observation_bytes)
+            .ok_or(BottomKError::SampleByteCountOverflow)?;
+        if actual_sample_bytes > profile.max_sample_bytes {
+            return Err(BottomKError::SampleByteLimitExceeded {
+                requested: actual_sample_bytes,
+                maximum: profile.max_sample_bytes,
+            }
+            .into());
+        }
+        let expected_hash = stable_hash(profile.hash_algorithm, profile.seed, observation)?;
+        if hash != expected_hash {
+            return Err(BottomKCodecError::HashMismatch {
+                index,
+                actual: hash,
+                expected: expected_hash,
+            });
+        }
+        validate_sample_successor(previous, hash, observation, index)?;
+        previous = Some((hash, observation));
+    }
+    if sample_bytes != actual_sample_bytes {
+        return Err(BottomKCodecError::SampleByteCountMismatch {
+            declared: sample_bytes,
+            actual: actual_sample_bytes,
+        });
+    }
+    decoder.finish()?;
+
+    Ok(DecodedBottomKHeader {
+        profile,
+        sample_bytes,
+        sample_count,
+    })
+}
+
+fn enforce_decode_limit(
+    resource: BottomKDecodeResource,
+    actual: usize,
+    maximum: usize,
+) -> Result<(), BottomKCodecError> {
+    if actual > maximum {
+        Err(BottomKCodecError::DecodeLimitExceeded {
+            resource,
+            actual,
+            maximum,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_sample_successor(
+    previous: Option<(u64, &[u8])>,
+    hash: u64,
+    observation: &[u8],
+    index: usize,
+) -> Result<(), BottomKCodecError> {
+    let Some((previous_hash, previous_observation)) = previous else {
+        return Ok(());
+    };
+    match previous_hash
+        .cmp(&hash)
+        .then_with(|| previous_observation.cmp(observation))
+    {
+        Ordering::Less => Ok(()),
+        Ordering::Equal => Err(BottomKCodecError::DuplicateSample { index }),
+        Ordering::Greater => Err(BottomKCodecError::SamplesOutOfOrder { index }),
+    }
+}
+
+fn expected_canonical_len(
+    sample_count: usize,
+    sample_bytes: usize,
+) -> Result<usize, BottomKCodecError> {
+    let sample_headers = sample_count
+        .checked_mul(CANONICAL_SAMPLE_HEADER_BYTES)
+        .ok_or(BottomKCodecError::LengthOverflow)?;
+    CANONICAL_HEADER_BYTES
+        .checked_add(sample_headers)
+        .and_then(|length| length.checked_add(sample_bytes))
+        .ok_or(BottomKCodecError::LengthOverflow)
+}
+
+fn canonical_usize(value: usize) -> Result<u64, BottomKCodecError> {
+    u64::try_from(value).map_err(|_| BottomKCodecError::IntegerUnrepresentable)
+}
+
+fn decoded_usize(value: u64) -> Result<usize, BottomKCodecError> {
+    usize::try_from(value).map_err(|_| BottomKCodecError::IntegerUnrepresentable)
+}
+
+fn decode_hash_algorithm(actual: u8) -> Result<BottomKHashAlgorithm, BottomKCodecError> {
+    match actual {
+        value if value == BottomKHashAlgorithm::SeededHasherV1.canonical_tag() => {
+            Ok(BottomKHashAlgorithm::SeededHasherV1)
+        }
+        actual => Err(BottomKCodecError::UnsupportedHashAlgorithm { actual }),
+    }
+}
+
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+fn push_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+struct BottomKDecoder<'bytes> {
+    bytes: &'bytes [u8],
+    offset: usize,
+}
+
+impl<'bytes> BottomKDecoder<'bytes> {
+    const fn new(bytes: &'bytes [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take(&mut self, needed: usize) -> Result<&'bytes [u8], BottomKCodecError> {
+        let end = self
+            .offset
+            .checked_add(needed)
+            .ok_or(BottomKCodecError::LengthOverflow)?;
+        let Some(value) = self.bytes.get(self.offset..end) else {
+            return Err(BottomKCodecError::Truncated {
+                offset: self.offset,
+                needed,
+                remaining: self.bytes.len().saturating_sub(self.offset),
+            });
+        };
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn read_array<const LENGTH: usize>(&mut self) -> Result<[u8; LENGTH], BottomKCodecError> {
+        let source = self.take(LENGTH)?;
+        let mut value = [0_u8; LENGTH];
+        value.copy_from_slice(source);
+        Ok(value)
+    }
+
+    fn read_u16(&mut self) -> Result<u16, BottomKCodecError> {
+        Ok(u16::from_be_bytes(self.read_array::<2>()?))
+    }
+
+    fn read_u8(&mut self) -> Result<u8, BottomKCodecError> {
+        Ok(self.read_array::<1>()?[0])
+    }
+
+    fn read_u64(&mut self) -> Result<u64, BottomKCodecError> {
+        Ok(u64::from_be_bytes(self.read_array::<8>()?))
+    }
+
+    fn finish(self) -> Result<(), BottomKCodecError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(BottomKCodecError::TrailingBytes {
+                offset: self.offset,
+                remaining: self.bytes.len() - self.offset,
+            })
+        }
+    }
+}
+
+fn stable_hash(
+    algorithm: BottomKHashAlgorithm,
+    seed: u64,
+    observation: &[u8],
+) -> Result<u64, BottomKError> {
+    let observation_bytes =
+        u64::try_from(observation.len()).map_err(|_| BottomKError::SampleByteCountOverflow)?;
+    match algorithm {
+        BottomKHashAlgorithm::SeededHasherV1 => {
+            let mut hasher = SeededHasher::new(seed);
+            hasher.write(HASH_DOMAIN);
+            hasher.write_u64(observation_bytes);
+            hasher.write(observation);
+            Ok(hasher.finish())
+        }
+    }
 }
 
 fn try_clone_sample(
@@ -479,6 +1120,15 @@ fn reserve_samples(
 mod tests {
     use super::*;
 
+    const VERSION_OFFSET: usize = CANONICAL_MAGIC.len();
+    const HASH_ALGORITHM_OFFSET: usize = VERSION_OFFSET + 2;
+    const K_OFFSET: usize = HASH_ALGORITHM_OFFSET + 1;
+    const SEED_OFFSET: usize = K_OFFSET + 8;
+    const MAX_OBSERVATION_BYTES_OFFSET: usize = SEED_OFFSET + 8;
+    const MAX_SAMPLE_BYTES_OFFSET: usize = MAX_OBSERVATION_BYTES_OFFSET + 8;
+    const SAMPLE_BYTES_OFFSET: usize = MAX_SAMPLE_BYTES_OFFSET + 8;
+    const SAMPLE_COUNT_OFFSET: usize = SAMPLE_BYTES_OFFSET + 8;
+
     fn profile(k: usize) -> BottomKProfile {
         BottomKProfile::new(k, 0x424f_5454_4f4d_4b31, 64, 256)
     }
@@ -487,12 +1137,73 @@ mod tests {
         BottomKSketch::try_new(profile(k)).expect("bounded profile")
     }
 
+    fn decode_limits(profile: BottomKProfile) -> BottomKDecodeLimits {
+        BottomKDecodeLimits::new(
+            usize::MAX,
+            profile.k,
+            profile.max_observation_bytes,
+            profile.max_sample_bytes,
+        )
+    }
+
+    fn read_fixture(
+        bytes: &[u8],
+        expected_profile: BottomKProfile,
+    ) -> Result<BottomKSketch, BottomKCodecError> {
+        BottomKSketch::try_from_canonical_bytes(
+            bytes,
+            expected_profile,
+            decode_limits(expected_profile),
+        )
+    }
+
     fn observe_all(sketch: &mut BottomKSketch, observations: &[&[u8]]) {
         for &observation in observations {
             sketch
                 .try_observe(observation)
                 .expect("bounded observation");
         }
+    }
+
+    fn raw_canonical_bytes(
+        profile: BottomKProfile,
+        declared_sample_bytes: usize,
+        samples: &[(u64, &[u8])],
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&CANONICAL_MAGIC);
+        push_u16(&mut bytes, CANONICAL_VERSION);
+        bytes.push(profile.hash_algorithm.canonical_tag());
+        push_u64(
+            &mut bytes,
+            u64::try_from(profile.k).expect("test profile fits u64"),
+        );
+        push_u64(&mut bytes, profile.seed);
+        push_u64(
+            &mut bytes,
+            u64::try_from(profile.max_observation_bytes).expect("test profile fits u64"),
+        );
+        push_u64(
+            &mut bytes,
+            u64::try_from(profile.max_sample_bytes).expect("test profile fits u64"),
+        );
+        push_u64(
+            &mut bytes,
+            u64::try_from(declared_sample_bytes).expect("test payload fits u64"),
+        );
+        push_u64(
+            &mut bytes,
+            u64::try_from(samples.len()).expect("test sample count fits u64"),
+        );
+        for &(hash, observation) in samples {
+            push_u64(&mut bytes, hash);
+            push_u64(
+                &mut bytes,
+                u64::try_from(observation.len()).expect("test observation fits u64"),
+            );
+            bytes.extend_from_slice(observation);
+        }
+        bytes
     }
 
     #[test]
@@ -522,12 +1233,396 @@ mod tests {
                 .all(|pair| pair[0] < pair[1])
         );
         assert_eq!(
-            stable_hash(profile(3).seed, b"alpha"),
+            stable_hash(profile(3).hash_algorithm, profile(3).seed, b"alpha")
+                .expect("bounded hash input"),
             0x36f6_5c36_d3c8_d99c
         );
         assert_ne!(
-            stable_hash(profile(3).seed, b"alpha"),
-            stable_hash(profile(3).seed ^ 1, b"alpha")
+            stable_hash(profile(3).hash_algorithm, profile(3).seed, b"alpha")
+                .expect("bounded hash input"),
+            stable_hash(profile(3).hash_algorithm, profile(3).seed ^ 1, b"alpha")
+                .expect("bounded hash input")
+        );
+    }
+
+    #[test]
+    fn canonical_codec_round_trips_and_collapses_observation_order() {
+        let observations = [
+            &b"alpha"[..],
+            &b"beta"[..],
+            &b"gamma"[..],
+            &b"delta"[..],
+            &b"epsilon"[..],
+        ];
+        let mut forward = sketch(4);
+        let mut reverse = sketch(4);
+        observe_all(&mut forward, &observations);
+        for &observation in observations.iter().rev() {
+            reverse
+                .try_observe(observation)
+                .expect("bounded observation");
+        }
+
+        let forward_bytes = forward
+            .try_to_canonical_bytes()
+            .expect("valid state encodes");
+        let reverse_bytes = reverse
+            .try_to_canonical_bytes()
+            .expect("valid state encodes");
+        assert_eq!(forward_bytes, reverse_bytes);
+        assert_eq!(&forward_bytes[..8], b"FGDBBTK1");
+        assert_eq!(
+            &forward_bytes[VERSION_OFFSET..HASH_ALGORITHM_OFFSET],
+            &1_u16.to_be_bytes()
+        );
+        assert_eq!(
+            forward_bytes[HASH_ALGORITHM_OFFSET],
+            BottomKHashAlgorithm::SeededHasherV1.canonical_tag()
+        );
+
+        let decoded = read_fixture(&forward_bytes, forward.profile()).expect("canonical value");
+        assert_eq!(decoded, forward);
+        assert_eq!(
+            decoded
+                .try_to_canonical_bytes()
+                .expect("decoded state re-encodes"),
+            forward_bytes
+        );
+    }
+
+    #[test]
+    fn canonical_decoder_requires_exact_profile_and_caller_owned_limits() {
+        let mut value = sketch(4);
+        observe_all(&mut value, &[b"alpha", b"beta"]);
+        let encoded = value.try_to_canonical_bytes().expect("valid state encodes");
+        let expected_profile = value.profile();
+        let exact_limits = BottomKDecodeLimits::new(
+            encoded.len(),
+            expected_profile.k,
+            expected_profile.max_observation_bytes,
+            expected_profile.max_sample_bytes,
+        );
+        assert_eq!(
+            BottomKSketch::try_from_canonical_bytes(&encoded, expected_profile, exact_limits)
+                .expect("exact admission bounds accept the value"),
+            value
+        );
+
+        let wrong_profile = BottomKProfile {
+            seed: expected_profile.seed ^ 1,
+            ..expected_profile
+        };
+        assert_eq!(
+            BottomKSketch::try_from_canonical_bytes(&encoded, wrong_profile, exact_limits),
+            Err(BottomKCodecError::ProfileMismatch {
+                expected: wrong_profile,
+                actual: expected_profile,
+            })
+        );
+        assert_eq!(
+            BottomKSketch::try_from_canonical_bytes(
+                &encoded,
+                expected_profile,
+                BottomKDecodeLimits {
+                    max_encoded_bytes: encoded.len() - 1,
+                    ..exact_limits
+                },
+            ),
+            Err(BottomKCodecError::DecodeLimitExceeded {
+                resource: BottomKDecodeResource::EncodedBytes,
+                actual: encoded.len(),
+                maximum: encoded.len() - 1,
+            })
+        );
+        assert_eq!(
+            BottomKSketch::try_from_canonical_bytes(
+                &encoded,
+                expected_profile,
+                BottomKDecodeLimits {
+                    max_samples: expected_profile.k - 1,
+                    ..exact_limits
+                },
+            ),
+            Err(BottomKCodecError::DecodeLimitExceeded {
+                resource: BottomKDecodeResource::Samples,
+                actual: expected_profile.k,
+                maximum: expected_profile.k - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn empty_huge_k_profile_does_not_allocate_and_decode_admission_caps_k() {
+        let huge_profile = BottomKProfile::new(usize::MAX, 7, 0, 0);
+        let mut left = BottomKSketch::try_new(huge_profile).expect("nonzero profile");
+        let right = BottomKSketch::try_new(huge_profile).expect("nonzero profile");
+        assert_eq!(left.samples.capacity(), 0);
+        left.try_merge(&right)
+            .expect("empty merge needs no reserve");
+        assert_eq!(left.samples.capacity(), 0);
+
+        let encoded = left.try_to_canonical_bytes().expect("empty state encodes");
+        assert_eq!(
+            BottomKSketch::try_from_canonical_bytes(
+                &encoded,
+                huge_profile,
+                BottomKDecodeLimits::new(encoded.len(), 1_024, 0, 0),
+            ),
+            Err(BottomKCodecError::DecodeLimitExceeded {
+                resource: BottomKDecodeResource::Samples,
+                actual: usize::MAX,
+                maximum: 1_024,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_codec_preserves_partitioned_merge_results() {
+        let left_values = [&b"a"[..], &b"d"[..], &b"g"[..], &b"shared"[..]];
+        let middle_values = [&b"b"[..], &b"e"[..], &b"h"[..], &b"shared"[..]];
+        let right_values = [&b"c"[..], &b"f"[..], &b"i"[..], &b"shared"[..]];
+
+        let mut left = sketch(5);
+        let mut middle = sketch(5);
+        let mut right = sketch(5);
+        observe_all(&mut left, &left_values);
+        observe_all(&mut middle, &middle_values);
+        observe_all(&mut right, &right_values);
+
+        let mut left_associated = left.clone();
+        left_associated
+            .try_merge(&middle)
+            .expect("matching profile");
+        left_associated.try_merge(&right).expect("matching profile");
+
+        middle.try_merge(&right).expect("matching profile");
+        left.try_merge(&middle).expect("matching profile");
+
+        let left_associated_bytes = left_associated
+            .try_to_canonical_bytes()
+            .expect("valid merged state");
+        let right_associated_bytes = left.try_to_canonical_bytes().expect("valid merged state");
+        assert_eq!(left_associated_bytes, right_associated_bytes);
+        assert_eq!(
+            read_fixture(&left_associated_bytes, left_associated.profile())
+                .expect("canonical merged state"),
+            left_associated
+        );
+    }
+
+    #[test]
+    fn canonical_encoder_rejects_forged_noncanonical_state() {
+        let mut valid = sketch(4);
+        observe_all(&mut valid, &[b"alpha", b"beta", b"gamma"]);
+
+        let mut wrong_hash = valid.clone();
+        wrong_hash.samples[0].hash ^= 1;
+        assert!(matches!(
+            wrong_hash.try_to_canonical_bytes(),
+            Err(BottomKCodecError::HashMismatch { index: 0, .. })
+        ));
+
+        let mut out_of_order = valid.clone();
+        out_of_order.samples.swap(0, 1);
+        assert_eq!(
+            out_of_order.try_to_canonical_bytes(),
+            Err(BottomKCodecError::SamplesOutOfOrder { index: 1 })
+        );
+
+        let mut duplicate = valid.clone();
+        duplicate.samples[1] = duplicate.samples[0].clone();
+        duplicate.sample_bytes = duplicate
+            .samples
+            .iter()
+            .map(|sample| sample.observation.len())
+            .sum();
+        assert_eq!(
+            duplicate.try_to_canonical_bytes(),
+            Err(BottomKCodecError::DuplicateSample { index: 1 })
+        );
+
+        let mut wrong_total = valid;
+        wrong_total.sample_bytes += 1;
+        assert!(matches!(
+            wrong_total.try_to_canonical_bytes(),
+            Err(BottomKCodecError::SampleByteCountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn canonical_decoder_rejects_malformed_headers_and_lengths_before_allocation() {
+        let mut value = sketch(4);
+        observe_all(&mut value, &[b"alpha", b"beta", b"gamma"]);
+        let encoded = value.try_to_canonical_bytes().expect("valid state encodes");
+
+        let mut wrong_magic = encoded.clone();
+        wrong_magic[0] ^= 1;
+        assert!(matches!(
+            read_fixture(&wrong_magic, value.profile()),
+            Err(BottomKCodecError::MagicMismatch { .. })
+        ));
+
+        let mut wrong_version = encoded.clone();
+        wrong_version[VERSION_OFFSET..HASH_ALGORITHM_OFFSET].copy_from_slice(&2_u16.to_be_bytes());
+        assert_eq!(
+            read_fixture(&wrong_version, value.profile()),
+            Err(BottomKCodecError::UnsupportedVersion { actual: 2 })
+        );
+
+        let mut wrong_hash_algorithm = encoded.clone();
+        wrong_hash_algorithm[HASH_ALGORITHM_OFFSET] = 2;
+        assert_eq!(
+            read_fixture(&wrong_hash_algorithm, value.profile()),
+            Err(BottomKCodecError::UnsupportedHashAlgorithm { actual: 2 })
+        );
+
+        let mut count_exceeds_k = encoded.clone();
+        count_exceeds_k[SAMPLE_COUNT_OFFSET..CANONICAL_HEADER_BYTES]
+            .copy_from_slice(&5_u64.to_be_bytes());
+        assert_eq!(
+            read_fixture(&count_exceeds_k, value.profile()),
+            Err(BottomKCodecError::SampleCountExceedsProfile {
+                actual: 5,
+                maximum: 4,
+            })
+        );
+
+        let mut impossible_count = raw_canonical_bytes(profile(1_000_000), 0, &[]);
+        impossible_count[SAMPLE_COUNT_OFFSET..CANONICAL_HEADER_BYTES]
+            .copy_from_slice(&1_000_000_u64.to_be_bytes());
+        assert!(matches!(
+            read_fixture(&impossible_count, profile(1_000_000)),
+            Err(BottomKCodecError::Truncated {
+                offset: CANONICAL_HEADER_BYTES,
+                ..
+            })
+        ));
+
+        for end in 0..encoded.len() {
+            assert!(
+                matches!(
+                    read_fixture(&encoded[..end], value.profile()),
+                    Err(BottomKCodecError::Truncated { .. })
+                ),
+                "prefix ending at byte {end} was not rejected as truncated"
+            );
+        }
+
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert_eq!(
+            read_fixture(&trailing, value.profile()),
+            Err(BottomKCodecError::TrailingBytes {
+                offset: trailing.len() - 1,
+                remaining: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_decoder_rejects_invalid_hash_order_distinctness_and_byte_state() {
+        let mut value = sketch(4);
+        observe_all(&mut value, &[b"alpha", b"beta", b"gamma"]);
+        let state = value.canonical_state();
+        let first = &state.samples[0];
+        let second = &state.samples[1];
+
+        let mut wrong_hash = raw_canonical_bytes(
+            state.profile,
+            first.observation.len(),
+            &[(first.hash ^ 1, &first.observation)],
+        );
+        assert!(matches!(
+            read_fixture(&wrong_hash, state.profile),
+            Err(BottomKCodecError::HashMismatch { index: 0, .. })
+        ));
+
+        let reversed_bytes = first
+            .observation
+            .len()
+            .checked_add(second.observation.len())
+            .expect("test payload fits");
+        let reversed = raw_canonical_bytes(
+            state.profile,
+            reversed_bytes,
+            &[
+                (second.hash, &second.observation),
+                (first.hash, &first.observation),
+            ],
+        );
+        assert_eq!(
+            read_fixture(&reversed, state.profile),
+            Err(BottomKCodecError::SamplesOutOfOrder { index: 1 })
+        );
+
+        let duplicate_bytes = first
+            .observation
+            .len()
+            .checked_mul(2)
+            .expect("test payload fits");
+        let duplicate = raw_canonical_bytes(
+            state.profile,
+            duplicate_bytes,
+            &[
+                (first.hash, &first.observation),
+                (first.hash, &first.observation),
+            ],
+        );
+        assert_eq!(
+            read_fixture(&duplicate, state.profile),
+            Err(BottomKCodecError::DuplicateSample { index: 1 })
+        );
+
+        wrong_hash[MAX_OBSERVATION_BYTES_OFFSET..MAX_SAMPLE_BYTES_OFFSET]
+            .copy_from_slice(&0_u64.to_be_bytes());
+        let zero_observation_profile = BottomKProfile {
+            max_observation_bytes: 0,
+            ..state.profile
+        };
+        assert!(matches!(
+            read_fixture(&wrong_hash, zero_observation_profile),
+            Err(BottomKCodecError::State(
+                BottomKError::ObservationTooLarge { maximum: 0, .. }
+            ))
+        ));
+
+        let actual_bytes = first.observation.len();
+        let mut wrong_total = raw_canonical_bytes(
+            state.profile,
+            actual_bytes + 1,
+            &[(first.hash, &first.observation)],
+        );
+        wrong_total.push(0);
+        assert_eq!(
+            read_fixture(&wrong_total, state.profile),
+            Err(BottomKCodecError::SampleByteCountMismatch {
+                declared: actual_bytes + 1,
+                actual: actual_bytes,
+            })
+        );
+
+        let mut over_limit = raw_canonical_bytes(
+            state.profile,
+            actual_bytes,
+            &[(first.hash, &first.observation)],
+        );
+        over_limit[MAX_SAMPLE_BYTES_OFFSET..SAMPLE_BYTES_OFFSET].copy_from_slice(
+            &u64::try_from(actual_bytes - 1)
+                .expect("test payload fits")
+                .to_be_bytes(),
+        );
+        let over_limit_profile = BottomKProfile {
+            max_sample_bytes: actual_bytes - 1,
+            ..state.profile
+        };
+        assert_eq!(
+            read_fixture(&over_limit, over_limit_profile),
+            Err(BottomKCodecError::State(
+                BottomKError::SampleByteLimitExceeded {
+                    requested: actual_bytes,
+                    maximum: actual_bytes - 1,
+                }
+            ))
         );
     }
 
@@ -591,7 +1686,13 @@ mod tests {
         let mut expected = left_values
             .into_iter()
             .chain(right_values)
-            .map(|bytes| (stable_hash(profile(4).seed, bytes), bytes))
+            .map(|bytes| {
+                (
+                    stable_hash(profile(4).hash_algorithm, profile(4).seed, bytes)
+                        .expect("bounded hash input"),
+                    bytes,
+                )
+            })
             .collect::<Vec<_>>();
         expected.sort();
         expected.dedup();
@@ -687,7 +1788,12 @@ mod tests {
         assert_eq!(
             saturated.try_remove(&retained_observation),
             Err(BottomKError::RebuildRequired {
-                observation_hash: stable_hash(profile(2).seed, &retained_observation),
+                observation_hash: stable_hash(
+                    profile(2).hash_algorithm,
+                    profile(2).seed,
+                    &retained_observation,
+                )
+                .expect("bounded hash input"),
             })
         );
         assert_eq!(saturated, before);

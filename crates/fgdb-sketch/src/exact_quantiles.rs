@@ -7,6 +7,37 @@
 use core::fmt;
 use std::collections::TryReserveError;
 
+const CANONICAL_MAGIC: [u8; 8] = *b"FGDBEQS1";
+const CANONICAL_VERSION: u16 = 1;
+const CANONICAL_HEADER_BYTES: usize = 8 + 2 + 8 + 8;
+const VALUE_BYTES: usize = 8;
+const DEFAULT_MAX_DECODED_OBSERVATIONS: usize = 1 << 20;
+const DEFAULT_MAX_ENCODED_BYTES: usize =
+    CANONICAL_HEADER_BYTES + (DEFAULT_MAX_DECODED_OBSERVATIONS * VALUE_BYTES);
+
+/// Caller-owned admission bounds for a canonical exact-quantile value.
+///
+/// The encoded ceiling remains part of merge identity, while these limits
+/// independently cap work and memory before any decoded state is allocated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExactQuantileDecodeLimits {
+    /// Largest accepted profile or concrete multiset length.
+    pub max_observations: usize,
+    /// Largest complete canonical value.
+    pub max_encoded_bytes: usize,
+}
+
+impl ExactQuantileDecodeLimits {
+    /// Conservative crate-level admission policy for small statistics windows.
+    #[must_use]
+    pub const fn conservative() -> Self {
+        Self {
+            max_observations: DEFAULT_MAX_DECODED_OBSERVATIONS,
+            max_encoded_bytes: DEFAULT_MAX_ENCODED_BYTES,
+        }
+    }
+}
+
 /// Typed exact-summary transition failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExactQuantileError {
@@ -84,6 +115,91 @@ impl fmt::Display for ExactQuantileError {
 
 impl std::error::Error for ExactQuantileError {}
 
+/// Strict canonical-codec failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExactQuantileCodecError {
+    /// A platform-sized field cannot be represented canonically.
+    IntegerUnrepresentable,
+    /// Exact encoded-size arithmetic overflowed.
+    LengthOverflow,
+    /// The allocator rejected the exact value or byte reservation.
+    AllocationFailed {
+        /// Requested element or byte count.
+        requested: usize,
+    },
+    /// The eight-byte format discriminator did not match.
+    MagicMismatch {
+        /// Bytes found at the format discriminator.
+        actual: [u8; 8],
+    },
+    /// The encoded version is unsupported.
+    UnsupportedVersion {
+        /// Version found in the input.
+        actual: u16,
+    },
+    /// Input ended before a complete field could be read.
+    Truncated {
+        /// Byte offset of the field.
+        offset: usize,
+        /// Bytes needed for the field.
+        needed: usize,
+        /// Bytes remaining at the offset.
+        remaining: usize,
+    },
+    /// Input contains bytes after the one canonical value.
+    TrailingBytes {
+        /// First trailing byte.
+        offset: usize,
+        /// Number of trailing bytes.
+        remaining: usize,
+    },
+    /// The encoded multiset exceeds its immutable profile ceiling.
+    ObservationLimitExceeded {
+        /// Encoded multiset length.
+        actual: usize,
+        /// Encoded profile ceiling.
+        maximum: usize,
+    },
+    /// Values are not in canonical nondecreasing order.
+    ValuesOutOfOrder {
+        /// First invalid index.
+        index: usize,
+        /// Preceding value.
+        previous: u64,
+        /// Current value.
+        current: u64,
+    },
+    /// The complete encoded value exceeds the caller-owned byte budget.
+    EncodedByteLimitExceeded {
+        /// Input byte length.
+        actual: usize,
+        /// Caller-owned byte ceiling.
+        maximum: usize,
+    },
+    /// The encoded profile or multiset exceeds the caller-owned value budget.
+    DecodeObservationLimitExceeded {
+        /// Encoded ceiling or concrete multiset length.
+        actual: usize,
+        /// Caller-owned observation ceiling.
+        maximum: usize,
+    },
+    /// The encoded profile is not the registry-selected profile.
+    ProfileMismatch {
+        /// Ceiling selected by trusted metadata.
+        expected_max_observations: usize,
+        /// Ceiling found in the canonical value.
+        actual_max_observations: usize,
+    },
+}
+
+impl fmt::Display for ExactQuantileCodecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for ExactQuantileCodecError {}
+
 /// Canonical sorted multiset with exact selection and deletion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExactQuantileSketch {
@@ -146,6 +262,149 @@ impl ExactQuantileSketch {
     #[must_use]
     pub fn canonical_values(&self) -> &[u64] {
         &self.values
+    }
+
+    /// Encodes the complete ceiling and sorted multiset into canonical bytes.
+    pub fn try_to_canonical_bytes(&self) -> Result<Vec<u8>, ExactQuantileCodecError> {
+        validate_canonical_values(self.max_observations, &self.values)?;
+        let payload_bytes = self
+            .values
+            .len()
+            .checked_mul(VALUE_BYTES)
+            .ok_or(ExactQuantileCodecError::LengthOverflow)?;
+        let encoded_len = CANONICAL_HEADER_BYTES
+            .checked_add(payload_bytes)
+            .ok_or(ExactQuantileCodecError::LengthOverflow)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(encoded_len)
+            .map_err(
+                |_: TryReserveError| ExactQuantileCodecError::AllocationFailed {
+                    requested: encoded_len,
+                },
+            )?;
+        bytes.extend_from_slice(&CANONICAL_MAGIC);
+        push_u16(&mut bytes, CANONICAL_VERSION);
+        push_u64(&mut bytes, canonical_usize(self.max_observations)?);
+        push_u64(&mut bytes, canonical_usize(self.values.len())?);
+        for value in &self.values {
+            push_u64(&mut bytes, *value);
+        }
+        debug_assert_eq!(bytes.len(), encoded_len);
+        Ok(bytes)
+    }
+
+    /// Decodes exactly one canonical sorted multiset.
+    ///
+    /// The byte length and immutable ceiling are checked before allocating
+    /// storage for decoded observations.
+    pub fn try_from_canonical_bytes(
+        bytes: &[u8],
+        expected_max_observations: usize,
+        limits: ExactQuantileDecodeLimits,
+    ) -> Result<Self, ExactQuantileCodecError> {
+        if bytes.len() > limits.max_encoded_bytes {
+            return Err(ExactQuantileCodecError::EncodedByteLimitExceeded {
+                actual: bytes.len(),
+                maximum: limits.max_encoded_bytes,
+            });
+        }
+        let mut decoder = ExactQuantileDecoder::new(bytes);
+        let magic = decoder.read_array::<8>()?;
+        if magic != CANONICAL_MAGIC {
+            return Err(ExactQuantileCodecError::MagicMismatch { actual: magic });
+        }
+        let version = decoder.read_u16()?;
+        if version != CANONICAL_VERSION {
+            return Err(ExactQuantileCodecError::UnsupportedVersion { actual: version });
+        }
+        let max_observations = decoded_usize(decoder.read_u64()?)?;
+        let value_count = decoded_usize(decoder.read_u64()?)?;
+        if max_observations != expected_max_observations {
+            return Err(ExactQuantileCodecError::ProfileMismatch {
+                expected_max_observations,
+                actual_max_observations: max_observations,
+            });
+        }
+        if max_observations > limits.max_observations {
+            return Err(ExactQuantileCodecError::DecodeObservationLimitExceeded {
+                actual: max_observations,
+                maximum: limits.max_observations,
+            });
+        }
+        if value_count > limits.max_observations {
+            return Err(ExactQuantileCodecError::DecodeObservationLimitExceeded {
+                actual: value_count,
+                maximum: limits.max_observations,
+            });
+        }
+        if value_count > max_observations {
+            return Err(ExactQuantileCodecError::ObservationLimitExceeded {
+                actual: value_count,
+                maximum: max_observations,
+            });
+        }
+        let payload_bytes = value_count
+            .checked_mul(VALUE_BYTES)
+            .ok_or(ExactQuantileCodecError::LengthOverflow)?;
+        let expected_len = CANONICAL_HEADER_BYTES
+            .checked_add(payload_bytes)
+            .ok_or(ExactQuantileCodecError::LengthOverflow)?;
+        if bytes.len() < expected_len {
+            return Err(ExactQuantileCodecError::Truncated {
+                offset: decoder.offset,
+                needed: payload_bytes,
+                remaining: bytes.len().saturating_sub(decoder.offset),
+            });
+        }
+        if bytes.len() > expected_len {
+            return Err(ExactQuantileCodecError::TrailingBytes {
+                offset: expected_len,
+                remaining: bytes.len() - expected_len,
+            });
+        }
+
+        let payload_offset = decoder.offset;
+        let mut preflight = ExactQuantileDecoder {
+            bytes,
+            offset: payload_offset,
+        };
+        let mut previous = None;
+        for index in 0..value_count {
+            let current = preflight.read_u64()?;
+            if let Some(previous) = previous
+                && previous > current
+            {
+                return Err(ExactQuantileCodecError::ValuesOutOfOrder {
+                    index,
+                    previous,
+                    current,
+                });
+            }
+            previous = Some(current);
+        }
+        preflight.finish()?;
+
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(value_count)
+            .map_err(
+                |_: TryReserveError| ExactQuantileCodecError::AllocationFailed {
+                    requested: value_count,
+                },
+            )?;
+        let mut decoder = ExactQuantileDecoder {
+            bytes,
+            offset: payload_offset,
+        };
+        for _ in 0..value_count {
+            values.push(decoder.read_u64()?);
+        }
+        decoder.finish()?;
+        Ok(Self {
+            max_observations,
+            values,
+        })
     }
 
     /// Inserts one value while preserving canonical order.
@@ -257,6 +516,95 @@ impl ExactQuantileSketch {
     }
 }
 
+fn validate_canonical_values(
+    max_observations: usize,
+    values: &[u64],
+) -> Result<(), ExactQuantileCodecError> {
+    if values.len() > max_observations {
+        return Err(ExactQuantileCodecError::ObservationLimitExceeded {
+            actual: values.len(),
+            maximum: max_observations,
+        });
+    }
+    for (offset, adjacent) in values.windows(2).enumerate() {
+        let [previous, current] = adjacent else {
+            continue;
+        };
+        if previous > current {
+            return Err(ExactQuantileCodecError::ValuesOutOfOrder {
+                index: offset + 1,
+                previous: *previous,
+                current: *current,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn canonical_usize(value: usize) -> Result<u64, ExactQuantileCodecError> {
+    u64::try_from(value).map_err(|_| ExactQuantileCodecError::IntegerUnrepresentable)
+}
+
+fn decoded_usize(value: u64) -> Result<usize, ExactQuantileCodecError> {
+    usize::try_from(value).map_err(|_| ExactQuantileCodecError::IntegerUnrepresentable)
+}
+
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+fn push_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+struct ExactQuantileDecoder<'bytes> {
+    bytes: &'bytes [u8],
+    offset: usize,
+}
+
+impl<'bytes> ExactQuantileDecoder<'bytes> {
+    const fn new(bytes: &'bytes [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn read_array<const LENGTH: usize>(&mut self) -> Result<[u8; LENGTH], ExactQuantileCodecError> {
+        let end = self
+            .offset
+            .checked_add(LENGTH)
+            .ok_or(ExactQuantileCodecError::LengthOverflow)?;
+        let Some(source) = self.bytes.get(self.offset..end) else {
+            return Err(ExactQuantileCodecError::Truncated {
+                offset: self.offset,
+                needed: LENGTH,
+                remaining: self.bytes.len().saturating_sub(self.offset),
+            });
+        };
+        let mut value = [0_u8; LENGTH];
+        value.copy_from_slice(source);
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn read_u16(&mut self) -> Result<u16, ExactQuantileCodecError> {
+        Ok(u16::from_be_bytes(self.read_array::<2>()?))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, ExactQuantileCodecError> {
+        Ok(u64::from_be_bytes(self.read_array::<8>()?))
+    }
+
+    fn finish(self) -> Result<(), ExactQuantileCodecError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(ExactQuantileCodecError::TrailingBytes {
+                offset: self.offset,
+                remaining: self.bytes.len() - self.offset,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,12 +617,140 @@ mod tests {
         sketch
     }
 
+    fn read_fixture(bytes: &[u8]) -> Result<ExactQuantileSketch, ExactQuantileCodecError> {
+        ExactQuantileSketch::try_from_canonical_bytes(
+            bytes,
+            100,
+            ExactQuantileDecodeLimits::conservative(),
+        )
+    }
+
     #[test]
     fn insertion_order_canonicalizes_the_multiset() {
         let forward = summary(&[9, 1, 5, 5, 2, u64::MAX, 0]);
         let reverse = summary(&[0, u64::MAX, 2, 5, 5, 1, 9]);
         assert_eq!(forward, reverse);
         assert_eq!(forward.canonical_values(), &[0, 1, 2, 5, 5, 9, u64::MAX]);
+    }
+
+    #[test]
+    fn canonical_codec_round_trips_and_is_insertion_order_independent() {
+        let forward = summary(&[9, 1, 5, 5, 2, u64::MAX, 0]);
+        let reverse = summary(&[0, u64::MAX, 2, 5, 5, 1, 9]);
+        let forward_bytes = forward
+            .try_to_canonical_bytes()
+            .expect("valid sorted multiset");
+        let reverse_bytes = reverse
+            .try_to_canonical_bytes()
+            .expect("valid sorted multiset");
+        assert_eq!(forward_bytes, reverse_bytes);
+        assert_eq!(&forward_bytes[..8], b"FGDBEQS1");
+        assert_eq!(&forward_bytes[8..10], &1_u16.to_be_bytes());
+
+        let decoded = read_fixture(&forward_bytes).expect("canonical summary");
+        assert_eq!(decoded, forward);
+        assert_eq!(
+            decoded.try_to_canonical_bytes().expect("decoded summary"),
+            forward_bytes
+        );
+    }
+
+    #[test]
+    fn canonical_decoder_rejects_noncanonical_or_incomplete_values() {
+        let encoded = summary(&[1, 2, 3])
+            .try_to_canonical_bytes()
+            .expect("valid summary");
+
+        let mut wrong_magic = encoded.clone();
+        wrong_magic[0] ^= 1;
+        assert!(matches!(
+            read_fixture(&wrong_magic),
+            Err(ExactQuantileCodecError::MagicMismatch { .. })
+        ));
+
+        let mut wrong_version = encoded.clone();
+        wrong_version[8..10].copy_from_slice(&2_u16.to_be_bytes());
+        assert_eq!(
+            read_fixture(&wrong_version),
+            Err(ExactQuantileCodecError::UnsupportedVersion { actual: 2 })
+        );
+
+        let mut above_limit = encoded.clone();
+        above_limit[18..26].copy_from_slice(&101_u64.to_be_bytes());
+        assert_eq!(
+            read_fixture(&above_limit),
+            Err(ExactQuantileCodecError::ObservationLimitExceeded {
+                actual: 101,
+                maximum: 100,
+            })
+        );
+
+        let mut out_of_order = encoded.clone();
+        out_of_order[26..34].copy_from_slice(&3_u64.to_be_bytes());
+        out_of_order[34..42].copy_from_slice(&2_u64.to_be_bytes());
+        assert_eq!(
+            read_fixture(&out_of_order),
+            Err(ExactQuantileCodecError::ValuesOutOfOrder {
+                index: 1,
+                previous: 3,
+                current: 2,
+            })
+        );
+
+        assert!(matches!(
+            read_fixture(&encoded[..encoded.len() - 1]),
+            Err(ExactQuantileCodecError::Truncated { .. })
+        ));
+
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(matches!(
+            read_fixture(&trailing),
+            Err(ExactQuantileCodecError::TrailingBytes { remaining: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn canonical_decoder_enforces_trusted_profile_and_resource_bounds() {
+        let encoded = summary(&[1, 2, 3])
+            .try_to_canonical_bytes()
+            .expect("valid summary");
+
+        assert_eq!(
+            ExactQuantileSketch::try_from_canonical_bytes(
+                &encoded,
+                99,
+                ExactQuantileDecodeLimits::conservative(),
+            ),
+            Err(ExactQuantileCodecError::ProfileMismatch {
+                expected_max_observations: 99,
+                actual_max_observations: 100,
+            })
+        );
+
+        let limits = ExactQuantileDecodeLimits {
+            max_observations: 99,
+            max_encoded_bytes: encoded.len(),
+        };
+        assert_eq!(
+            ExactQuantileSketch::try_from_canonical_bytes(&encoded, 100, limits),
+            Err(ExactQuantileCodecError::DecodeObservationLimitExceeded {
+                actual: 100,
+                maximum: 99,
+            })
+        );
+
+        let limits = ExactQuantileDecodeLimits {
+            max_observations: 100,
+            max_encoded_bytes: encoded.len() - 1,
+        };
+        assert_eq!(
+            ExactQuantileSketch::try_from_canonical_bytes(&encoded, 100, limits),
+            Err(ExactQuantileCodecError::EncodedByteLimitExceeded {
+                actual: encoded.len(),
+                maximum: encoded.len() - 1,
+            })
+        );
     }
 
     #[test]

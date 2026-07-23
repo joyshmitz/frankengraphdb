@@ -26,12 +26,31 @@ pub const ESTIMATE_FRACTION_BITS: u32 = 32;
 
 const DISTINCT_HASH_DOMAIN: u64 = 0x4647_4442_4449_5354;
 const LN_2_Q64: u128 = 0xb172_17f7_d1cf_79ab;
+const CANONICAL_MAGIC: [u8; 8] = *b"FGDBDST1";
+const CANONICAL_VERSION: u16 = 1;
+const CANONICAL_HEADER_BYTES: usize = 8 + 2 + 1 + 1 + 8 + 8 + 8;
+
+/// Stable hash algorithm named by a distinct-sketch profile.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(u8)]
+pub enum DistinctHashAlgorithm {
+    /// Domain-separated [`SeededHasher`] stream frozen by canonical vectors.
+    SeededHasherV1 = 1,
+}
+
+impl DistinctHashAlgorithm {
+    const fn canonical_tag(self) -> u8 {
+        self as u8
+    }
+}
 
 /// Complete hashing, precision, and resource profile.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct DistinctProfile {
     /// High hash bits used as the canonical register index.
     pub precision: u8,
+    /// Stable hash algorithm included in profile identity.
+    pub hash_algorithm: DistinctHashAlgorithm,
     /// Explicit deterministic root seed.
     pub seed: u64,
     /// Maximum register bytes this profile may allocate.
@@ -44,8 +63,29 @@ impl DistinctProfile {
     pub const fn new(precision: u8, seed: u64) -> Self {
         Self {
             precision,
+            hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
             seed,
             max_registers: DEFAULT_MAX_REGISTERS,
+        }
+    }
+}
+
+/// Caller-owned admission bounds for decoding one distinct sketch.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct DistinctDecodeLimits {
+    /// Maximum accepted canonical value length.
+    pub max_encoded_bytes: usize,
+    /// Maximum accepted encoded profile ceiling and register allocation.
+    pub max_registers: usize,
+}
+
+impl DistinctDecodeLimits {
+    /// Creates explicit caller-owned decode admission bounds.
+    #[must_use]
+    pub const fn new(max_encoded_bytes: usize, max_registers: usize) -> Self {
+        Self {
+            max_encoded_bytes,
+            max_registers,
         }
     }
 }
@@ -140,6 +180,99 @@ impl fmt::Display for DistinctError {
 
 impl std::error::Error for DistinctError {}
 
+/// Caller-owned resource checked while admitting canonical distinct bytes.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DistinctDecodeResource {
+    /// Total canonical input bytes.
+    EncodedBytes,
+    /// Profile ceiling or materialized register count.
+    Registers,
+}
+
+/// Strict canonical-codec failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DistinctCodecError {
+    /// The in-memory or decoded sketch violates a construction invariant.
+    State(DistinctError),
+    /// A platform-sized profile field cannot be represented canonically.
+    IntegerUnrepresentable,
+    /// Computing the exact canonical value length overflowed.
+    LengthOverflow,
+    /// The allocator rejected the exact canonical byte reservation.
+    AllocationFailed {
+        /// Requested byte count.
+        requested: usize,
+    },
+    /// The eight-byte format discriminator did not match.
+    MagicMismatch {
+        /// Bytes found at the canonical magic position.
+        actual: [u8; 8],
+    },
+    /// The format version is not implemented.
+    UnsupportedVersion {
+        /// Version found in the input.
+        actual: u16,
+    },
+    /// The encoded hash-algorithm discriminator is not implemented.
+    UnsupportedHashAlgorithm {
+        /// Discriminator found in the canonical profile.
+        actual: u8,
+    },
+    /// The encoded complete profile does not equal the trusted expected profile.
+    ProfileMismatch {
+        /// Trusted profile supplied by the caller.
+        expected: DistinctProfile,
+        /// Profile decoded from the canonical header.
+        actual: DistinctProfile,
+    },
+    /// A caller-owned decode admission bound was exceeded.
+    DecodeLimitExceeded {
+        /// Resource whose admission bound was exceeded.
+        resource: DistinctDecodeResource,
+        /// Encoded profile, state, or input value.
+        actual: usize,
+        /// Caller-owned maximum.
+        maximum: usize,
+    },
+    /// Input ended before a complete field could be read.
+    Truncated {
+        /// Byte offset of the field or payload.
+        offset: usize,
+        /// Bytes needed at that offset.
+        needed: usize,
+        /// Bytes remaining at the offset.
+        remaining: usize,
+    },
+    /// The encoded register count disagrees with the precision.
+    RegisterCountMismatch {
+        /// Register count implied by the encoded precision.
+        expected: usize,
+        /// Register count declared by the input.
+        actual: usize,
+    },
+    /// Input contains bytes after the one canonical value.
+    TrailingBytes {
+        /// First trailing byte.
+        offset: usize,
+        /// Number of trailing bytes.
+        remaining: usize,
+    },
+}
+
+impl fmt::Display for DistinctCodecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for DistinctCodecError {}
+
+impl From<DistinctError> for DistinctCodecError {
+    fn from(error: DistinctError) -> Self {
+        Self::State(error)
+    }
+}
+
 /// Canonical logical state borrowed from a sketch.
 ///
 /// Registers are ordered by the unsigned value of the high `precision` hash
@@ -209,24 +342,7 @@ pub struct DistinctSketch {
 impl DistinctSketch {
     /// Allocates a zeroed canonical register array after checking all bounds.
     pub fn try_new(profile: DistinctProfile) -> Result<Self, DistinctError> {
-        if !(MIN_PRECISION..=MAX_PRECISION).contains(&profile.precision) {
-            return Err(DistinctError::PrecisionOutOfRange {
-                requested: profile.precision,
-                minimum: MIN_PRECISION,
-                maximum: MAX_PRECISION,
-            });
-        }
-        let register_count = 1_usize.checked_shl(u32::from(profile.precision)).ok_or(
-            DistinctError::RegisterCountOverflow {
-                precision: profile.precision,
-            },
-        )?;
-        if register_count > profile.max_registers {
-            return Err(DistinctError::RegisterLimitExceeded {
-                requested: register_count,
-                limit: profile.max_registers,
-            });
-        }
+        let register_count = checked_register_count(profile)?;
 
         let mut registers = Vec::new();
         registers
@@ -265,11 +381,130 @@ impl DistinctSketch {
         }
     }
 
+    /// Encodes the complete profile and logical state into one canonical value.
+    ///
+    /// The representation uses fixed-width big-endian fields followed by the
+    /// canonically indexed one-byte register array. Equal logical states
+    /// therefore produce byte-identical values without relying on host word
+    /// size.
+    pub fn try_to_canonical_bytes(&self) -> Result<Vec<u8>, DistinctCodecError> {
+        self.validate_canonical_shape()?;
+        let canonical_max_registers = canonical_usize(self.profile.max_registers)?;
+        let canonical_register_count = canonical_usize(self.registers.len())?;
+        let encoded_len = CANONICAL_HEADER_BYTES
+            .checked_add(self.registers.len())
+            .ok_or(DistinctCodecError::LengthOverflow)?;
+
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(encoded_len)
+            .map_err(|_: TryReserveError| DistinctCodecError::AllocationFailed {
+                requested: encoded_len,
+            })?;
+        bytes.extend_from_slice(&CANONICAL_MAGIC);
+        push_u16(&mut bytes, CANONICAL_VERSION);
+        bytes.push(self.profile.hash_algorithm.canonical_tag());
+        bytes.push(self.profile.precision);
+        push_u64(&mut bytes, self.profile.seed);
+        push_u64(&mut bytes, canonical_max_registers);
+        push_u64(&mut bytes, canonical_register_count);
+        bytes.extend_from_slice(&self.registers);
+        debug_assert_eq!(bytes.len(), encoded_len);
+        Ok(bytes)
+    }
+
+    /// Decodes exactly one strict canonical value and revalidates every law.
+    ///
+    /// The complete header, declared shape, exact input length, and every
+    /// register rank are validated before allocating the register array.
+    pub fn try_from_canonical_bytes(
+        bytes: &[u8],
+        expected_profile: DistinctProfile,
+        limits: DistinctDecodeLimits,
+    ) -> Result<Self, DistinctCodecError> {
+        enforce_decode_limit(
+            DistinctDecodeResource::EncodedBytes,
+            bytes.len(),
+            limits.max_encoded_bytes,
+        )?;
+        let mut decoder = DistinctDecoder::new(bytes);
+        let magic = decoder.read_array::<8>()?;
+        if magic != CANONICAL_MAGIC {
+            return Err(DistinctCodecError::MagicMismatch { actual: magic });
+        }
+        let version = decoder.read_u16()?;
+        if version != CANONICAL_VERSION {
+            return Err(DistinctCodecError::UnsupportedVersion { actual: version });
+        }
+        let hash_algorithm = decode_hash_algorithm(decoder.read_u8()?)?;
+        let precision = decoder.read_u8()?;
+        let seed = decoder.read_u64()?;
+        let max_registers = decoded_usize(decoder.read_u64()?)?;
+        let encoded_register_count = decoded_usize(decoder.read_u64()?)?;
+        let profile = DistinctProfile {
+            precision,
+            hash_algorithm,
+            seed,
+            max_registers,
+        };
+        if profile != expected_profile {
+            return Err(DistinctCodecError::ProfileMismatch {
+                expected: expected_profile,
+                actual: profile,
+            });
+        }
+        enforce_decode_limit(
+            DistinctDecodeResource::Registers,
+            profile.max_registers,
+            limits.max_registers,
+        )?;
+        let expected_register_count = checked_register_count(profile)?;
+        if encoded_register_count != expected_register_count {
+            return Err(DistinctCodecError::RegisterCountMismatch {
+                expected: expected_register_count,
+                actual: encoded_register_count,
+            });
+        }
+        enforce_decode_limit(
+            DistinctDecodeResource::Registers,
+            encoded_register_count,
+            limits.max_registers,
+        )?;
+        let expected_len = CANONICAL_HEADER_BYTES
+            .checked_add(encoded_register_count)
+            .ok_or(DistinctCodecError::LengthOverflow)?;
+        if bytes.len() < expected_len {
+            return Err(DistinctCodecError::Truncated {
+                offset: decoder.offset,
+                needed: encoded_register_count,
+                remaining: bytes.len().saturating_sub(decoder.offset),
+            });
+        }
+        if bytes.len() > expected_len {
+            return Err(DistinctCodecError::TrailingBytes {
+                offset: expected_len,
+                remaining: bytes.len() - expected_len,
+            });
+        }
+
+        let encoded_registers = decoder.take(encoded_register_count)?;
+        decoder.finish()?;
+        validate_registers(profile, encoded_registers)?;
+
+        let mut sketch = Self::try_new(profile)?;
+        sketch.registers.copy_from_slice(encoded_registers);
+        Ok(sketch)
+    }
+
     /// Observes a canonical byte key.
     ///
     /// Returns `true` exactly when one canonical register increased.
     pub fn observe(&mut self, key: &[u8]) -> bool {
-        self.observe_hash(hash_key(self.profile.seed, key))
+        self.observe_hash(hash_key(
+            self.profile.hash_algorithm,
+            self.profile.seed,
+            key,
+        ))
     }
 
     /// Rejects deletion without changing the insertion-only sketch.
@@ -340,29 +575,7 @@ impl DistinctSketch {
     }
 
     fn validate_canonical_shape(&self) -> Result<(), DistinctError> {
-        let expected = 1_usize
-            .checked_shl(u32::from(self.profile.precision))
-            .ok_or(DistinctError::RegisterCountOverflow {
-                precision: self.profile.precision,
-            })?;
-        let maximum = self.maximum_rank();
-        if self.registers.len() != expected {
-            return Err(DistinctError::NonCanonicalRegisters {
-                index: self.registers.len().min(expected),
-                value: 0,
-                maximum,
-            });
-        }
-        for (index, &value) in self.registers.iter().enumerate() {
-            if value > maximum {
-                return Err(DistinctError::NonCanonicalRegisters {
-                    index,
-                    value,
-                    maximum,
-                });
-            }
-        }
-        Ok(())
+        validate_registers(self.profile, &self.registers)
     }
 
     fn raw_estimate_q32(&self, register_count: u64) -> u128 {
@@ -380,16 +593,64 @@ impl DistinctSketch {
     }
 }
 
+fn checked_register_count(profile: DistinctProfile) -> Result<usize, DistinctError> {
+    if !(MIN_PRECISION..=MAX_PRECISION).contains(&profile.precision) {
+        return Err(DistinctError::PrecisionOutOfRange {
+            requested: profile.precision,
+            minimum: MIN_PRECISION,
+            maximum: MAX_PRECISION,
+        });
+    }
+    let register_count = 1_usize.checked_shl(u32::from(profile.precision)).ok_or(
+        DistinctError::RegisterCountOverflow {
+            precision: profile.precision,
+        },
+    )?;
+    if register_count > profile.max_registers {
+        return Err(DistinctError::RegisterLimitExceeded {
+            requested: register_count,
+            limit: profile.max_registers,
+        });
+    }
+    Ok(register_count)
+}
+
+fn validate_registers(profile: DistinctProfile, registers: &[u8]) -> Result<(), DistinctError> {
+    let expected = checked_register_count(profile)?;
+    let maximum = maximum_rank(profile.precision);
+    if registers.len() != expected {
+        return Err(DistinctError::NonCanonicalRegisters {
+            index: registers.len().min(expected),
+            value: 0,
+            maximum,
+        });
+    }
+    for (index, &value) in registers.iter().enumerate() {
+        if value > maximum {
+            return Err(DistinctError::NonCanonicalRegisters {
+                index,
+                value,
+                maximum,
+            });
+        }
+    }
+    Ok(())
+}
+
 const fn maximum_rank(precision: u8) -> u8 {
     65 - precision
 }
 
-fn hash_key(seed: u64, key: &[u8]) -> u64 {
-    let mut hasher = SeededHasher::new(seed);
-    hasher.write_u64(DISTINCT_HASH_DOMAIN);
-    hasher.write_u64(key.len() as u64);
-    hasher.write(key);
-    hasher.finish()
+fn hash_key(algorithm: DistinctHashAlgorithm, seed: u64, key: &[u8]) -> u64 {
+    match algorithm {
+        DistinctHashAlgorithm::SeededHasherV1 => {
+            let mut hasher = SeededHasher::new(seed);
+            hasher.write_u64(DISTINCT_HASH_DOMAIN);
+            hasher.write_u64(key.len() as u64);
+            hasher.write(key);
+            hasher.finish()
+        }
+    }
 }
 
 fn index_and_rank(hash: u64, precision: u8) -> (usize, u8) {
@@ -461,16 +722,124 @@ fn multiply_q64(left: u128, right: u128) -> u128 {
     left.saturating_mul(right) >> 64
 }
 
+fn enforce_decode_limit(
+    resource: DistinctDecodeResource,
+    actual: usize,
+    maximum: usize,
+) -> Result<(), DistinctCodecError> {
+    if actual > maximum {
+        Err(DistinctCodecError::DecodeLimitExceeded {
+            resource,
+            actual,
+            maximum,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn canonical_usize(value: usize) -> Result<u64, DistinctCodecError> {
+    u64::try_from(value).map_err(|_| DistinctCodecError::IntegerUnrepresentable)
+}
+
+fn decoded_usize(value: u64) -> Result<usize, DistinctCodecError> {
+    usize::try_from(value).map_err(|_| DistinctCodecError::IntegerUnrepresentable)
+}
+
+fn decode_hash_algorithm(actual: u8) -> Result<DistinctHashAlgorithm, DistinctCodecError> {
+    match actual {
+        value if value == DistinctHashAlgorithm::SeededHasherV1.canonical_tag() => {
+            Ok(DistinctHashAlgorithm::SeededHasherV1)
+        }
+        actual => Err(DistinctCodecError::UnsupportedHashAlgorithm { actual }),
+    }
+}
+
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+fn push_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+struct DistinctDecoder<'bytes> {
+    bytes: &'bytes [u8],
+    offset: usize,
+}
+
+impl<'bytes> DistinctDecoder<'bytes> {
+    const fn new(bytes: &'bytes [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take(&mut self, needed: usize) -> Result<&'bytes [u8], DistinctCodecError> {
+        let end = self
+            .offset
+            .checked_add(needed)
+            .ok_or(DistinctCodecError::LengthOverflow)?;
+        let Some(value) = self.bytes.get(self.offset..end) else {
+            return Err(DistinctCodecError::Truncated {
+                offset: self.offset,
+                needed,
+                remaining: self.bytes.len().saturating_sub(self.offset),
+            });
+        };
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn read_array<const LENGTH: usize>(&mut self) -> Result<[u8; LENGTH], DistinctCodecError> {
+        let source = self.take(LENGTH)?;
+        let mut value = [0_u8; LENGTH];
+        value.copy_from_slice(source);
+        Ok(value)
+    }
+
+    fn read_u8(&mut self) -> Result<u8, DistinctCodecError> {
+        Ok(self.read_array::<1>()?[0])
+    }
+
+    fn read_u16(&mut self) -> Result<u16, DistinctCodecError> {
+        Ok(u16::from_be_bytes(self.read_array::<2>()?))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, DistinctCodecError> {
+        Ok(u64::from_be_bytes(self.read_array::<8>()?))
+    }
+
+    fn finish(self) -> Result<(), DistinctCodecError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(DistinctCodecError::TrailingBytes {
+                offset: self.offset,
+                remaining: self.bytes.len() - self.offset,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_MAX_REGISTERS, DistinctError, DistinctEstimateMethod, DistinctProfile,
-        DistinctSketch, MAX_PRECISION, MIN_PRECISION, index_and_rank, maximum_rank,
+        CANONICAL_HEADER_BYTES, CANONICAL_MAGIC, DEFAULT_MAX_REGISTERS, DistinctCodecError,
+        DistinctDecodeLimits, DistinctDecodeResource, DistinctError, DistinctEstimateMethod,
+        DistinctHashAlgorithm, DistinctProfile, DistinctSketch, MAX_PRECISION, MIN_PRECISION,
+        hash_key, index_and_rank, maximum_rank,
     };
+
+    const VERSION_OFFSET: usize = CANONICAL_MAGIC.len();
+    const HASH_ALGORITHM_OFFSET: usize = VERSION_OFFSET + 2;
+    const PRECISION_OFFSET: usize = HASH_ALGORITHM_OFFSET + 1;
+    const SEED_OFFSET: usize = PRECISION_OFFSET + 1;
+    const MAX_REGISTERS_OFFSET: usize = SEED_OFFSET + 8;
+    const REGISTER_COUNT_OFFSET: usize = MAX_REGISTERS_OFFSET + 8;
 
     fn profile() -> DistinctProfile {
         DistinctProfile {
             precision: 12,
+            hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
             seed: 0x484c_4c44_4953_5431,
             max_registers: 1 << 12,
         }
@@ -478,6 +847,21 @@ mod tests {
 
     fn sketch() -> Result<DistinctSketch, DistinctError> {
         DistinctSketch::try_new(profile())
+    }
+
+    fn decode_limits(profile: DistinctProfile) -> DistinctDecodeLimits {
+        DistinctDecodeLimits::new(usize::MAX, profile.max_registers)
+    }
+
+    fn read_fixture(
+        bytes: &[u8],
+        expected_profile: DistinctProfile,
+    ) -> Result<DistinctSketch, DistinctCodecError> {
+        DistinctSketch::try_from_canonical_bytes(
+            bytes,
+            expected_profile,
+            decode_limits(expected_profile),
+        )
     }
 
     fn populated(keys: &[u64]) -> Result<DistinctSketch, DistinctError> {
@@ -509,6 +893,7 @@ mod tests {
         assert_eq!(
             DistinctSketch::try_new(DistinctProfile {
                 precision: 10,
+                hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
                 seed: 1,
                 max_registers: 1_023,
             }),
@@ -525,6 +910,13 @@ mod tests {
 
     #[test]
     fn index_and_rank_cover_first_last_and_zero_suffix_boundaries() {
+        let frozen_hash = hash_key(
+            DistinctHashAlgorithm::SeededHasherV1,
+            profile().seed,
+            b"alpha",
+        );
+        assert_eq!(frozen_hash, 0xa32f_ef99_88df_3345);
+        assert_eq!(index_and_rank(frozen_hash, profile().precision), (2_610, 1));
         assert_eq!(index_and_rank(0, 4), (0, maximum_rank(4)));
         assert_eq!(
             index_and_rank(0xf000_0000_0000_0000, 4),
@@ -565,6 +957,390 @@ mod tests {
             other.canonical_state().registers
         );
         Ok(())
+    }
+
+    #[test]
+    fn canonical_codec_round_trips_full_profile_and_collapses_order() -> Result<(), DistinctError> {
+        let keys: Vec<_> = (0_u64..2_000).collect();
+        let forward = populated(&keys)?;
+        let reverse_keys: Vec<_> = keys.iter().rev().copied().collect();
+        let reverse = populated(&reverse_keys)?;
+
+        let forward_bytes = forward
+            .try_to_canonical_bytes()
+            .expect("valid sketch must encode");
+        let reverse_bytes = reverse
+            .try_to_canonical_bytes()
+            .expect("valid sketch must encode");
+        assert_eq!(forward_bytes, reverse_bytes);
+        assert_eq!(&forward_bytes[..VERSION_OFFSET], b"FGDBDST1");
+        assert_eq!(
+            &forward_bytes[VERSION_OFFSET..HASH_ALGORITHM_OFFSET],
+            &1_u16.to_be_bytes()
+        );
+        assert_eq!(
+            forward_bytes[HASH_ALGORITHM_OFFSET],
+            DistinctHashAlgorithm::SeededHasherV1.canonical_tag()
+        );
+        assert_eq!(forward_bytes[PRECISION_OFFSET], profile().precision);
+        assert_eq!(
+            &forward_bytes[SEED_OFFSET..MAX_REGISTERS_OFFSET],
+            &profile().seed.to_be_bytes()
+        );
+        assert_eq!(
+            &forward_bytes[MAX_REGISTERS_OFFSET..REGISTER_COUNT_OFFSET],
+            &(profile().max_registers as u64).to_be_bytes()
+        );
+        assert_eq!(
+            &forward_bytes[REGISTER_COUNT_OFFSET..CANONICAL_HEADER_BYTES],
+            &(forward.register_count() as u64).to_be_bytes()
+        );
+
+        let decoded =
+            read_fixture(&forward_bytes, forward.profile()).expect("canonical sketch must decode");
+        assert_eq!(decoded, forward);
+        assert_eq!(decoded.profile(), profile());
+        assert_eq!(decoded.canonical_state(), forward.canonical_state());
+        assert_eq!(
+            decoded
+                .try_to_canonical_bytes()
+                .expect("decoded sketch must re-encode"),
+            forward_bytes
+        );
+
+        let mut looser_profile = profile();
+        looser_profile.max_registers += 1;
+        let mut looser = DistinctSketch::try_new(looser_profile)?;
+        for key in &keys {
+            looser.observe(&key.to_le_bytes());
+        }
+        assert_eq!(
+            looser.canonical_state().registers,
+            forward.canonical_state().registers
+        );
+        let looser_bytes = looser
+            .try_to_canonical_bytes()
+            .expect("valid alternate profile must encode");
+        assert_ne!(looser_bytes, forward_bytes);
+        assert_eq!(
+            read_fixture(&looser_bytes, looser_profile)
+                .expect("complete alternate profile must decode")
+                .profile(),
+            looser_profile
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_decoder_requires_exact_profile_and_caller_owned_limits() {
+        let value = sketch().expect("valid profile");
+        let encoded = value.try_to_canonical_bytes().expect("valid sketch");
+        let expected_profile = value.profile();
+        let exact_limits = DistinctDecodeLimits::new(encoded.len(), expected_profile.max_registers);
+        assert_eq!(
+            DistinctSketch::try_from_canonical_bytes(&encoded, expected_profile, exact_limits)
+                .expect("exact admission bounds accept the value"),
+            value
+        );
+
+        let wrong_profile = DistinctProfile {
+            seed: expected_profile.seed ^ 1,
+            ..expected_profile
+        };
+        assert_eq!(
+            DistinctSketch::try_from_canonical_bytes(&encoded, wrong_profile, exact_limits),
+            Err(DistinctCodecError::ProfileMismatch {
+                expected: wrong_profile,
+                actual: expected_profile,
+            })
+        );
+        assert_eq!(
+            DistinctSketch::try_from_canonical_bytes(
+                &encoded,
+                expected_profile,
+                DistinctDecodeLimits {
+                    max_encoded_bytes: encoded.len() - 1,
+                    ..exact_limits
+                },
+            ),
+            Err(DistinctCodecError::DecodeLimitExceeded {
+                resource: DistinctDecodeResource::EncodedBytes,
+                actual: encoded.len(),
+                maximum: encoded.len() - 1,
+            })
+        );
+        assert_eq!(
+            DistinctSketch::try_from_canonical_bytes(
+                &encoded,
+                expected_profile,
+                DistinctDecodeLimits {
+                    max_registers: expected_profile.max_registers - 1,
+                    ..exact_limits
+                },
+            ),
+            Err(DistinctCodecError::DecodeLimitExceeded {
+                resource: DistinctDecodeResource::Registers,
+                actual: expected_profile.max_registers,
+                maximum: expected_profile.max_registers - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_codec_round_trips_precision_boundaries() {
+        for precision in [MIN_PRECISION, 8, 12, MAX_PRECISION] {
+            let profile =
+                DistinctProfile::new(precision, 0x434f_4445_4350_0000 | u64::from(precision));
+            let mut value = DistinctSketch::try_new(profile).expect("supported precision");
+            value.observe(b"alpha");
+            value.observe(b"omega");
+            let encoded = value
+                .try_to_canonical_bytes()
+                .expect("bounded sketch must encode");
+            assert_eq!(encoded.len(), CANONICAL_HEADER_BYTES + (1 << precision));
+            let decoded = read_fixture(&encoded, profile).expect("canonical boundary sketch");
+            assert_eq!(decoded, value);
+        }
+    }
+
+    #[test]
+    fn canonical_codec_preserves_merge_and_deletion_laws() -> Result<(), DistinctError> {
+        let a = populated(&(0_u64..1_000).collect::<Vec<_>>())?;
+        let b = populated(&(500_u64..1_500).collect::<Vec<_>>())?;
+        let c = populated(&(1_200_u64..2_000).collect::<Vec<_>>())?;
+        let round_trip_operand = |value: &DistinctSketch| {
+            let bytes = value
+                .try_to_canonical_bytes()
+                .expect("valid operand must encode");
+            read_fixture(&bytes, value.profile()).expect("encoded operand must decode")
+        };
+        let a = round_trip_operand(&a);
+        let b = round_trip_operand(&b);
+        let c = round_trip_operand(&c);
+
+        let mut ab = a.clone();
+        ab.try_merge(&b)?;
+        let mut ba = b.clone();
+        ba.try_merge(&a)?;
+        assert_eq!(
+            ab.try_to_canonical_bytes()
+                .expect("merged state must encode"),
+            ba.try_to_canonical_bytes()
+                .expect("merged state must encode")
+        );
+
+        let mut ab_c = ab;
+        ab_c.try_merge(&c)?;
+        let mut bc = b;
+        bc.try_merge(&c)?;
+        let mut a_bc = a.clone();
+        a_bc.try_merge(&bc)?;
+        assert_eq!(
+            ab_c.try_to_canonical_bytes()
+                .expect("left-associated merge must encode"),
+            a_bc.try_to_canonical_bytes()
+                .expect("right-associated merge must encode")
+        );
+        let direct = populated(&(0_u64..2_000).collect::<Vec<_>>())?;
+        assert_eq!(ab_c, direct);
+
+        let before_idempotent = a.try_to_canonical_bytes().expect("valid state must encode");
+        let mut idempotent = a.clone();
+        idempotent.try_merge(&a)?;
+        assert_eq!(
+            idempotent
+                .try_to_canonical_bytes()
+                .expect("idempotent merge must encode"),
+            before_idempotent
+        );
+
+        let before_delete = ab_c
+            .try_to_canonical_bytes()
+            .expect("valid state must encode");
+        assert_eq!(
+            ab_c.try_remove(b"cannot-delete"),
+            Err(DistinctError::RebuildRequired)
+        );
+        assert_eq!(
+            ab_c.try_to_canonical_bytes()
+                .expect("rejected deletion must preserve encodability"),
+            before_delete
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_decoder_rejects_every_truncation_and_trailing_byte() {
+        let small_profile = DistinctProfile {
+            precision: MIN_PRECISION,
+            hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
+            seed: 0x5452_554e_4341_5445,
+            max_registers: 1 << MIN_PRECISION,
+        };
+        let mut value = DistinctSketch::try_new(small_profile).expect("small valid profile");
+        value.observe(b"truncation");
+        let encoded = value.try_to_canonical_bytes().expect("small valid sketch");
+
+        for cutoff in 0..encoded.len() {
+            assert!(
+                matches!(
+                    read_fixture(&encoded[..cutoff], small_profile),
+                    Err(DistinctCodecError::Truncated { .. })
+                ),
+                "prefix of length {cutoff} was not rejected as truncated"
+            );
+        }
+
+        let mut trailing = encoded;
+        trailing.extend_from_slice(&[0, 1, 2]);
+        assert_eq!(
+            read_fixture(&trailing, small_profile),
+            Err(DistinctCodecError::TrailingBytes {
+                offset: CANONICAL_HEADER_BYTES + (1 << MIN_PRECISION),
+                remaining: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_decoder_rejects_wrong_identity_shape_bounds_and_ranks() {
+        let small_profile = DistinctProfile {
+            precision: MIN_PRECISION,
+            hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
+            seed: 0x4d41_4c46_4f52_4d45,
+            max_registers: 1 << MIN_PRECISION,
+        };
+        let value = DistinctSketch::try_new(small_profile).expect("small valid profile");
+        let encoded = value.try_to_canonical_bytes().expect("small valid sketch");
+
+        let mut wrong_magic = encoded.clone();
+        wrong_magic[0] ^= 1;
+        assert!(matches!(
+            read_fixture(&wrong_magic, small_profile),
+            Err(DistinctCodecError::MagicMismatch { .. })
+        ));
+
+        let mut wrong_version = encoded.clone();
+        wrong_version[VERSION_OFFSET..HASH_ALGORITHM_OFFSET].copy_from_slice(&2_u16.to_be_bytes());
+        assert_eq!(
+            read_fixture(&wrong_version, small_profile),
+            Err(DistinctCodecError::UnsupportedVersion { actual: 2 })
+        );
+
+        let mut wrong_hash_algorithm = encoded.clone();
+        wrong_hash_algorithm[HASH_ALGORITHM_OFFSET] = 2;
+        assert_eq!(
+            read_fixture(&wrong_hash_algorithm, small_profile),
+            Err(DistinctCodecError::UnsupportedHashAlgorithm { actual: 2 })
+        );
+
+        for bad_precision in [MIN_PRECISION - 1, MAX_PRECISION + 1] {
+            let mut wrong_precision = encoded.clone();
+            wrong_precision[PRECISION_OFFSET] = bad_precision;
+            let bad_profile = DistinctProfile {
+                precision: bad_precision,
+                ..small_profile
+            };
+            assert_eq!(
+                read_fixture(&wrong_precision, bad_profile),
+                Err(DistinctCodecError::State(
+                    DistinctError::PrecisionOutOfRange {
+                        requested: bad_precision,
+                        minimum: MIN_PRECISION,
+                        maximum: MAX_PRECISION,
+                    }
+                ))
+            );
+        }
+
+        let mut insufficient_ceiling = encoded.clone();
+        insufficient_ceiling[MAX_REGISTERS_OFFSET..REGISTER_COUNT_OFFSET]
+            .copy_from_slice(&((1_u64 << MIN_PRECISION) - 1).to_be_bytes());
+        let insufficient_profile = DistinctProfile {
+            max_registers: (1 << MIN_PRECISION) - 1,
+            ..small_profile
+        };
+        assert_eq!(
+            read_fixture(&insufficient_ceiling, insufficient_profile),
+            Err(DistinctCodecError::State(
+                DistinctError::RegisterLimitExceeded {
+                    requested: 1 << MIN_PRECISION,
+                    limit: (1 << MIN_PRECISION) - 1,
+                }
+            ))
+        );
+
+        let mut wrong_count = encoded.clone();
+        wrong_count[REGISTER_COUNT_OFFSET..CANONICAL_HEADER_BYTES]
+            .copy_from_slice(&((1_u64 << MIN_PRECISION) - 1).to_be_bytes());
+        assert_eq!(
+            read_fixture(&wrong_count, small_profile),
+            Err(DistinctCodecError::RegisterCountMismatch {
+                expected: 1 << MIN_PRECISION,
+                actual: (1 << MIN_PRECISION) - 1,
+            })
+        );
+
+        let mut enormous_count = encoded.clone();
+        enormous_count[REGISTER_COUNT_OFFSET..CANONICAL_HEADER_BYTES]
+            .copy_from_slice(&u64::MAX.to_be_bytes());
+        assert!(matches!(
+            read_fixture(&enormous_count, small_profile),
+            Err(DistinctCodecError::IntegerUnrepresentable)
+                | Err(DistinctCodecError::RegisterCountMismatch { .. })
+        ));
+
+        let bad_index = 7;
+        let bad_rank = maximum_rank(MIN_PRECISION) + 1;
+        let mut bad_register = encoded;
+        bad_register[CANONICAL_HEADER_BYTES + bad_index] = bad_rank;
+        assert_eq!(
+            read_fixture(&bad_register, small_profile),
+            Err(DistinctCodecError::State(
+                DistinctError::NonCanonicalRegisters {
+                    index: bad_index,
+                    value: bad_rank,
+                    maximum: maximum_rank(MIN_PRECISION),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn canonical_encoder_rejects_noncanonical_internal_state() {
+        let small_profile = DistinctProfile {
+            precision: MIN_PRECISION,
+            hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
+            seed: 0x454e_434f_4445_5252,
+            max_registers: 1 << MIN_PRECISION,
+        };
+        let value = DistinctSketch::try_new(small_profile).expect("small valid profile");
+
+        let mut invalid_rank = value.clone();
+        invalid_rank.registers[3] = maximum_rank(MIN_PRECISION) + 1;
+        assert_eq!(
+            invalid_rank.try_to_canonical_bytes(),
+            Err(DistinctCodecError::State(
+                DistinctError::NonCanonicalRegisters {
+                    index: 3,
+                    value: maximum_rank(MIN_PRECISION) + 1,
+                    maximum: maximum_rank(MIN_PRECISION),
+                }
+            ))
+        );
+
+        let mut missing_register = value;
+        missing_register.registers.pop();
+        assert_eq!(
+            missing_register.try_to_canonical_bytes(),
+            Err(DistinctCodecError::State(
+                DistinctError::NonCanonicalRegisters {
+                    index: (1 << MIN_PRECISION) - 1,
+                    value: 0,
+                    maximum: maximum_rank(MIN_PRECISION),
+                }
+            ))
+        );
     }
 
     #[test]
@@ -670,6 +1446,7 @@ mod tests {
         for case in cases {
             let mut value = DistinctSketch::try_new(DistinctProfile {
                 precision: 14,
+                hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
                 seed: 0x5359_4e54_4845_5449,
                 max_registers: 1 << 14,
             })?;

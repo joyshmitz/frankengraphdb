@@ -10,6 +10,11 @@ use core::fmt;
 /// Number of canonical degree buckets.
 pub const DEGREE_BUCKETS: usize = u64::BITS as usize + 1;
 
+const CANONICAL_MAGIC: [u8; 8] = *b"FGDBDGH1";
+const CANONICAL_VERSION: u16 = 1;
+/// Exact byte length of one canonical degree histogram.
+pub const DEGREE_HISTOGRAM_CANONICAL_BYTES: usize = 8 + 2 + 2 + 8 + 8 + (DEGREE_BUCKETS * 8);
+
 /// Inclusive value interval represented by one bucket.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct DegreeBucket {
@@ -74,6 +79,80 @@ impl fmt::Display for DegreeHistogramError {
 
 impl std::error::Error for DegreeHistogramError {}
 
+/// Strict canonical-codec failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DegreeHistogramCodecError {
+    /// Input length is not the one fixed canonical histogram length.
+    EncodedLengthMismatch {
+        /// Required fixed canonical length.
+        expected: usize,
+        /// Actual input length.
+        actual: usize,
+    },
+    /// The eight-byte format discriminator did not match.
+    MagicMismatch {
+        /// Bytes found at the format discriminator.
+        actual: [u8; 8],
+    },
+    /// The encoded version is unsupported.
+    UnsupportedVersion {
+        /// Version found in the input.
+        actual: u16,
+    },
+    /// The encoded bucket inventory is not the fixed canonical inventory.
+    BucketCountMismatch {
+        /// Bucket count found in the input.
+        actual: u16,
+    },
+    /// The encoded observation ceiling does not equal the trusted expected ceiling.
+    ProfileMismatch {
+        /// Trusted observation ceiling supplied by the caller.
+        expected_maximum: u64,
+        /// Observation ceiling decoded from the canonical header.
+        actual_maximum: u64,
+    },
+    /// Input ended before a complete field could be read.
+    Truncated {
+        /// Byte offset of the field.
+        offset: usize,
+        /// Bytes needed for the field.
+        needed: usize,
+        /// Bytes remaining at the offset.
+        remaining: usize,
+    },
+    /// Input contains bytes after the one canonical value.
+    TrailingBytes {
+        /// First trailing byte.
+        offset: usize,
+        /// Number of trailing bytes.
+        remaining: usize,
+    },
+    /// The encoded observation count exceeds its profile ceiling.
+    ObservationLimitExceeded {
+        /// Encoded observation count.
+        actual: u64,
+        /// Encoded ceiling.
+        maximum: u64,
+    },
+    /// Adding canonical bucket counts overflowed.
+    CountOverflow,
+    /// Canonical bucket counts do not sum to the encoded total.
+    TotalMismatch {
+        /// Encoded total.
+        expected: u64,
+        /// Sum of bucket counts.
+        actual: u64,
+    },
+}
+
+impl fmt::Display for DegreeHistogramCodecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for DegreeHistogramCodecError {}
+
 /// Exact-at-bucket-resolution histogram with checked merge and deletion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DegreeHistogram {
@@ -115,6 +194,80 @@ impl DegreeHistogram {
     #[must_use]
     pub const fn canonical_counts(&self) -> &[u64; DEGREE_BUCKETS] {
         &self.counts
+    }
+
+    /// Encodes the complete profile and buckets into fixed canonical bytes.
+    pub fn to_canonical_bytes(
+        &self,
+    ) -> Result<[u8; DEGREE_HISTOGRAM_CANONICAL_BYTES], DegreeHistogramCodecError> {
+        validate_canonical_counts(self.max_observations, self.total, &self.counts)?;
+        let mut bytes = [0_u8; DEGREE_HISTOGRAM_CANONICAL_BYTES];
+        let mut offset = 0;
+        copy_field(&mut bytes, &mut offset, &CANONICAL_MAGIC);
+        copy_field(&mut bytes, &mut offset, &CANONICAL_VERSION.to_be_bytes());
+        copy_field(
+            &mut bytes,
+            &mut offset,
+            &(DEGREE_BUCKETS as u16).to_be_bytes(),
+        );
+        copy_field(
+            &mut bytes,
+            &mut offset,
+            &self.max_observations.to_be_bytes(),
+        );
+        copy_field(&mut bytes, &mut offset, &self.total.to_be_bytes());
+        for count in self.counts {
+            copy_field(&mut bytes, &mut offset, &count.to_be_bytes());
+        }
+        debug_assert_eq!(offset, DEGREE_HISTOGRAM_CANONICAL_BYTES);
+        Ok(bytes)
+    }
+
+    /// Decodes exactly one fixed canonical histogram value.
+    pub fn try_from_canonical_bytes(
+        bytes: &[u8],
+        expected_max_observations: u64,
+    ) -> Result<Self, DegreeHistogramCodecError> {
+        if bytes.len() != DEGREE_HISTOGRAM_CANONICAL_BYTES {
+            return Err(DegreeHistogramCodecError::EncodedLengthMismatch {
+                expected: DEGREE_HISTOGRAM_CANONICAL_BYTES,
+                actual: bytes.len(),
+            });
+        }
+        let mut decoder = DegreeHistogramDecoder::new(bytes);
+        let magic = decoder.read_array::<8>()?;
+        if magic != CANONICAL_MAGIC {
+            return Err(DegreeHistogramCodecError::MagicMismatch { actual: magic });
+        }
+        let version = decoder.read_u16()?;
+        if version != CANONICAL_VERSION {
+            return Err(DegreeHistogramCodecError::UnsupportedVersion { actual: version });
+        }
+        let bucket_count = decoder.read_u16()?;
+        if usize::from(bucket_count) != DEGREE_BUCKETS {
+            return Err(DegreeHistogramCodecError::BucketCountMismatch {
+                actual: bucket_count,
+            });
+        }
+        let max_observations = decoder.read_u64()?;
+        if max_observations != expected_max_observations {
+            return Err(DegreeHistogramCodecError::ProfileMismatch {
+                expected_maximum: expected_max_observations,
+                actual_maximum: max_observations,
+            });
+        }
+        let total = decoder.read_u64()?;
+        let mut counts = [0_u64; DEGREE_BUCKETS];
+        for count in &mut counts {
+            *count = decoder.read_u64()?;
+        }
+        decoder.finish()?;
+        validate_canonical_counts(max_observations, total, &counts)?;
+        Ok(Self {
+            counts,
+            total,
+            max_observations,
+        })
     }
 
     /// Adds one degree observation.
@@ -240,6 +393,95 @@ fn bucket_bounds(index: usize) -> (u64, u64) {
     }
 }
 
+fn validate_canonical_counts(
+    max_observations: u64,
+    total: u64,
+    counts: &[u64; DEGREE_BUCKETS],
+) -> Result<(), DegreeHistogramCodecError> {
+    if total > max_observations {
+        return Err(DegreeHistogramCodecError::ObservationLimitExceeded {
+            actual: total,
+            maximum: max_observations,
+        });
+    }
+    let mut sum = 0_u64;
+    for count in counts {
+        sum = sum
+            .checked_add(*count)
+            .ok_or(DegreeHistogramCodecError::CountOverflow)?;
+    }
+    if sum != total {
+        return Err(DegreeHistogramCodecError::TotalMismatch {
+            expected: total,
+            actual: sum,
+        });
+    }
+    Ok(())
+}
+
+fn copy_field<const LENGTH: usize>(
+    destination: &mut [u8; DEGREE_HISTOGRAM_CANONICAL_BYTES],
+    offset: &mut usize,
+    value: &[u8; LENGTH],
+) {
+    let end = *offset + LENGTH;
+    destination[*offset..end].copy_from_slice(value);
+    *offset = end;
+}
+
+struct DegreeHistogramDecoder<'bytes> {
+    bytes: &'bytes [u8],
+    offset: usize,
+}
+
+impl<'bytes> DegreeHistogramDecoder<'bytes> {
+    const fn new(bytes: &'bytes [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn read_array<const LENGTH: usize>(
+        &mut self,
+    ) -> Result<[u8; LENGTH], DegreeHistogramCodecError> {
+        let Some(end) = self.offset.checked_add(LENGTH) else {
+            return Err(DegreeHistogramCodecError::Truncated {
+                offset: self.offset,
+                needed: LENGTH,
+                remaining: self.bytes.len().saturating_sub(self.offset),
+            });
+        };
+        let Some(source) = self.bytes.get(self.offset..end) else {
+            return Err(DegreeHistogramCodecError::Truncated {
+                offset: self.offset,
+                needed: LENGTH,
+                remaining: self.bytes.len().saturating_sub(self.offset),
+            });
+        };
+        let mut value = [0_u8; LENGTH];
+        value.copy_from_slice(source);
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn read_u16(&mut self) -> Result<u16, DegreeHistogramCodecError> {
+        Ok(u16::from_be_bytes(self.read_array::<2>()?))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, DegreeHistogramCodecError> {
+        Ok(u64::from_be_bytes(self.read_array::<8>()?))
+    }
+
+    fn finish(self) -> Result<(), DegreeHistogramCodecError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(DegreeHistogramCodecError::TrailingBytes {
+                offset: self.offset,
+                remaining: self.bytes.len() - self.offset,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +539,96 @@ mod tests {
             Err(DegreeHistogramError::MissingObservation {
                 degree: 2,
                 bucket: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_codec_round_trips_and_is_observation_order_independent() {
+        let observations = [0, 1, 2, 3, 3, 8, u64::MAX];
+        let mut forward = DegreeHistogram::new(20);
+        let mut reverse = DegreeHistogram::new(20);
+        for degree in observations {
+            forward.try_observe(degree).expect("within ceiling");
+        }
+        for degree in observations.into_iter().rev() {
+            reverse.try_observe(degree).expect("within ceiling");
+        }
+
+        let forward_bytes = forward.to_canonical_bytes().expect("valid histogram");
+        let reverse_bytes = reverse.to_canonical_bytes().expect("valid histogram");
+        assert_eq!(forward_bytes, reverse_bytes);
+        assert_eq!(&forward_bytes[..8], b"FGDBDGH1");
+        assert_eq!(&forward_bytes[8..10], &1_u16.to_be_bytes());
+
+        let decoded = DegreeHistogram::try_from_canonical_bytes(&forward_bytes, 20)
+            .expect("canonical histogram");
+        assert_eq!(decoded, forward);
+        assert_eq!(
+            DegreeHistogram::try_from_canonical_bytes(&forward_bytes, 19),
+            Err(DegreeHistogramCodecError::ProfileMismatch {
+                expected_maximum: 19,
+                actual_maximum: 20,
+            })
+        );
+        assert_eq!(
+            decoded.to_canonical_bytes().expect("decoded histogram"),
+            forward_bytes
+        );
+    }
+
+    #[test]
+    fn canonical_decoder_rejects_noncanonical_or_incomplete_values() {
+        let mut histogram = DegreeHistogram::new(20);
+        for degree in [0, 1, 2, 3] {
+            histogram.try_observe(degree).expect("within ceiling");
+        }
+        let encoded = histogram.to_canonical_bytes().expect("valid histogram");
+
+        let mut wrong_magic = encoded;
+        wrong_magic[0] ^= 1;
+        assert!(matches!(
+            DegreeHistogram::try_from_canonical_bytes(&wrong_magic, 20),
+            Err(DegreeHistogramCodecError::MagicMismatch { .. })
+        ));
+
+        let mut wrong_version = encoded;
+        wrong_version[8..10].copy_from_slice(&2_u16.to_be_bytes());
+        assert_eq!(
+            DegreeHistogram::try_from_canonical_bytes(&wrong_version, 20),
+            Err(DegreeHistogramCodecError::UnsupportedVersion { actual: 2 })
+        );
+
+        let mut wrong_bucket_count = encoded;
+        wrong_bucket_count[10..12].copy_from_slice(&64_u16.to_be_bytes());
+        assert_eq!(
+            DegreeHistogram::try_from_canonical_bytes(&wrong_bucket_count, 20),
+            Err(DegreeHistogramCodecError::BucketCountMismatch { actual: 64 })
+        );
+
+        let mut wrong_total = encoded;
+        wrong_total[27] ^= 1;
+        assert!(matches!(
+            DegreeHistogram::try_from_canonical_bytes(&wrong_total, 20),
+            Err(DegreeHistogramCodecError::TotalMismatch { .. })
+                | Err(DegreeHistogramCodecError::ObservationLimitExceeded { .. })
+        ));
+
+        assert_eq!(
+            DegreeHistogram::try_from_canonical_bytes(&encoded[..encoded.len() - 1], 20),
+            Err(DegreeHistogramCodecError::EncodedLengthMismatch {
+                expected: DEGREE_HISTOGRAM_CANONICAL_BYTES,
+                actual: DEGREE_HISTOGRAM_CANONICAL_BYTES - 1,
+            })
+        );
+
+        let mut trailing = encoded.to_vec();
+        trailing.push(0);
+        assert_eq!(
+            DegreeHistogram::try_from_canonical_bytes(&trailing, 20),
+            Err(DegreeHistogramCodecError::EncodedLengthMismatch {
+                expected: DEGREE_HISTOGRAM_CANONICAL_BYTES,
+                actual: DEGREE_HISTOGRAM_CANONICAL_BYTES + 1,
             })
         );
     }
