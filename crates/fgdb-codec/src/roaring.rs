@@ -74,8 +74,6 @@ pub enum AllocationTarget {
     BitmapWords,
     /// Inclusive pairs in a run container.
     Runs,
-    /// Temporary low values for one intersected chunk.
-    IntersectionValues,
 }
 
 /// Stable names for checked representation-size calculations.
@@ -479,10 +477,21 @@ impl RoaringBitmap {
     ///
     /// A first allocation-free pass computes the exact result cardinality and
     /// non-empty chunk count, stopping as soon as the result is known to exceed
-    /// `limit`. Compressed run and bitmap containers are counted without
-    /// expanding them value by value. The second pass allocates only output
-    /// chunks and at most one matching chunk's low values at a time.
+    /// `limit`. Compressed run and bitmap containers are summarized and emitted
+    /// as maximal runs without expanding them value by value. The second pass
+    /// allocates only the canonical output containers; it never materializes a
+    /// cardinality-sized intersection scratch buffer.
     pub fn intersection(&self, other: &Self, limit: EntryLimit) -> Result<Self, RoaringError> {
+        let mut reservation = SystemReservation;
+        self.intersection_with(other, limit, &mut reservation)
+    }
+
+    fn intersection_with<R: Reservation>(
+        &self,
+        other: &Self,
+        limit: EntryLimit,
+        reservation: &mut R,
+    ) -> Result<Self, RoaringError> {
         let (result_len, result_chunks) = intersection_shape(self, other, limit)?;
         if result_len == 0 {
             return Ok(Self {
@@ -491,14 +500,13 @@ impl RoaringBitmap {
             });
         }
 
-        let mut reservation = SystemReservation;
         let mut chunks = Vec::new();
         reserve_exact(
             &mut chunks,
             result_chunks,
             AllocationTarget::ChunkDirectory,
             None,
-            &mut reservation,
+            reservation,
         )?;
 
         let mut left_index = 0_usize;
@@ -511,27 +519,22 @@ impl RoaringBitmap {
                 core::cmp::Ordering::Less => left_index += 1,
                 core::cmp::Ordering::Greater => right_index += 1,
                 core::cmp::Ordering::Equal => {
-                    let cardinality = intersection_cardinality(&left.container, &right.container)?;
-                    if cardinality != 0 {
-                        let mut lows = Vec::new();
-                        reserve_exact(
-                            &mut lows,
-                            cardinality,
-                            AllocationTarget::IntersectionValues,
-                            Some(left.high_key),
-                            &mut reservation,
+                    let summary = intersection_summary(&left.container, &right.container)?;
+                    if summary.cardinality != 0 {
+                        let container = build_intersection_container(
+                            &left.container,
+                            &right.container,
+                            summary,
+                            left.high_key,
+                            reservation,
                         )?;
-                        write_intersection(&left.container, &right.container, &mut lows);
-                        debug_assert_eq!(lows.len(), cardinality);
-                        let container =
-                            build_container_from_lows(&lows, left.high_key, &mut reservation)?;
                         chunks.push(Chunk {
                             high_key: left.high_key,
                             prefix_len,
-                            cardinality,
+                            cardinality: summary.cardinality,
                             container,
                         });
-                        prefix_len = prefix_len.checked_add(cardinality).ok_or(
+                        prefix_len = prefix_len.checked_add(summary.cardinality).ok_or(
                             RoaringError::SizeOverflow {
                                 calculation: SizeCalculation::TotalCardinality,
                             },
@@ -817,26 +820,33 @@ fn build_container_from_values<R: Reservation>(
     }
 }
 
-fn build_container_from_lows<R: Reservation>(
-    values: &[u16],
+fn build_intersection_container<R: Reservation>(
+    left: &Container,
+    right: &Container,
+    summary: IntersectionSummary,
     high_key: u16,
     reservation: &mut R,
 ) -> Result<Container, RoaringError> {
-    debug_assert!(!values.is_empty());
-    let runs = count_runs(values.iter().copied());
-    let kind = choose_kind(values.len(), runs)?;
+    debug_assert_ne!(summary.cardinality, 0);
+    debug_assert_ne!(summary.run_count, 0);
+    let kind = choose_kind(summary.cardinality, summary.run_count)?;
 
     match kind {
         ContainerKind::Array => {
             let mut lows = Vec::new();
             reserve_exact(
                 &mut lows,
-                values.len(),
+                summary.cardinality,
                 AllocationTarget::ArrayValues,
                 Some(high_key),
                 reservation,
             )?;
-            lows.extend_from_slice(values);
+            let completed = visit_intersection_runs(left, right, |run| {
+                lows.extend(run.start..=run.end);
+                core::ops::ControlFlow::Continue(())
+            });
+            debug_assert!(completed.is_continue());
+            debug_assert_eq!(lows.len(), summary.cardinality);
             Ok(Container::Array(lows))
         }
         ContainerKind::Bitmap => {
@@ -849,21 +859,28 @@ fn build_container_from_lows<R: Reservation>(
                 reservation,
             )?;
             words.resize(BITMAP_WORDS, 0_u64);
-            for &value in values {
-                set_bit(&mut words, value);
-            }
+            let completed = visit_intersection_runs(left, right, |run| {
+                set_run(&mut words, run);
+                core::ops::ControlFlow::Continue(())
+            });
+            debug_assert!(completed.is_continue());
             Ok(Container::Bitmap(words))
         }
         ContainerKind::Run => {
             let mut encoded_runs = Vec::new();
             reserve_exact(
                 &mut encoded_runs,
-                runs,
+                summary.run_count,
                 AllocationTarget::Runs,
                 Some(high_key),
                 reservation,
             )?;
-            write_runs(values.iter().copied(), &mut encoded_runs);
+            let completed = visit_intersection_runs(left, right, |run| {
+                encoded_runs.push(run);
+                core::ops::ControlFlow::Continue(())
+            });
+            debug_assert!(completed.is_continue());
+            debug_assert_eq!(encoded_runs.len(), summary.run_count);
             Ok(Container::Run(encoded_runs))
         }
     }
@@ -932,6 +949,38 @@ fn set_bit(words: &mut [u64], low: u16) {
     words[index / u64::BITS as usize] |= 1_u64 << (index % u64::BITS as usize);
 }
 
+fn set_run(words: &mut [u64], run: Run) {
+    let start = usize::from(run.start);
+    let end = usize::from(run.end);
+    let first_word = start / u64::BITS as usize;
+    let last_word = end / u64::BITS as usize;
+    let first_bit = start % u64::BITS as usize;
+    let last_bit = end % u64::BITS as usize;
+
+    if first_word == last_word {
+        words[first_word] |= inclusive_bit_mask(first_bit, last_bit);
+        return;
+    }
+
+    words[first_word] |= u64::MAX << first_bit;
+    if first_word + 1 < last_word {
+        words[first_word + 1..last_word].fill(u64::MAX);
+    }
+    words[last_word] |= inclusive_bit_mask(0, last_bit);
+}
+
+fn inclusive_bit_mask(first: usize, last: usize) -> u64 {
+    debug_assert!(first <= last);
+    debug_assert!(last < u64::BITS as usize);
+    let lower = u64::MAX << first;
+    let upper = if last == u64::BITS as usize - 1 {
+        u64::MAX
+    } else {
+        (1_u64 << (last + 1)) - 1
+    };
+    lower & upper
+}
+
 fn intersection_shape(
     left: &RoaringBitmap,
     right: &RoaringBitmap,
@@ -978,90 +1027,199 @@ fn intersection_shape(
     Ok((cardinality, chunks))
 }
 
+#[cfg(test)]
 fn intersection_cardinality(left: &Container, right: &Container) -> Result<usize, RoaringError> {
     intersection_cardinality_bounded(left, right, usize::MAX)?.ok_or(RoaringError::SizeOverflow {
         calculation: SizeCalculation::IntersectionCardinality,
     })
 }
 
-/// Counts a container intersection up to `limit` without expanding compressed
-/// runs or bitmap words into individual values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IntersectionSummary {
+    cardinality: usize,
+    run_count: usize,
+}
+
+fn intersection_summary(
+    left: &Container,
+    right: &Container,
+) -> Result<IntersectionSummary, RoaringError> {
+    intersection_summary_bounded(left, right, usize::MAX)?.ok_or(RoaringError::SizeOverflow {
+        calculation: SizeCalculation::IntersectionCardinality,
+    })
+}
+
+/// Summarizes a container intersection up to `limit` without expanding
+/// compressed runs or bitmap words into individual values.
 ///
 /// `None` is a proof that the cardinality is at least `limit + 1`; callers do
 /// not need to scan the remainder merely to report an exact rejected size.
+fn intersection_summary_bounded(
+    left: &Container,
+    right: &Container,
+    limit: usize,
+) -> Result<Option<IntersectionSummary>, RoaringError> {
+    let mut summary = IntersectionSummary {
+        cardinality: 0,
+        run_count: 0,
+    };
+    let completed = visit_intersection_runs(left, right, |run| {
+        let run_cardinality = usize::from(run.end) - usize::from(run.start) + 1;
+        if run_cardinality > limit.saturating_sub(summary.cardinality) {
+            return core::ops::ControlFlow::Break(());
+        }
+        // A single container covers only the 16-bit low-value universe, so
+        // these additions cannot overflow once the explicit bound passes.
+        summary.cardinality += run_cardinality;
+        summary.run_count += 1;
+        core::ops::ControlFlow::Continue(())
+    });
+    if completed.is_break() {
+        Ok(None)
+    } else {
+        Ok(Some(summary))
+    }
+}
+
 fn intersection_cardinality_bounded(
     left: &Container,
     right: &Container,
     limit: usize,
 ) -> Result<Option<usize>, RoaringError> {
+    Ok(intersection_summary_bounded(left, right, limit)?.map(|summary| summary.cardinality))
+}
+
+fn visit_intersection_runs(
+    left: &Container,
+    right: &Container,
+    mut visitor: impl FnMut(Run) -> core::ops::ControlFlow<()>,
+) -> core::ops::ControlFlow<()> {
     match (left, right) {
         (Container::Array(left_values), Container::Array(right_values)) => {
-            count_array_array(left_values, right_values, limit)
+            visit_array_array_runs(left_values, right_values, &mut visitor)
         }
         (Container::Array(values), Container::Bitmap(words))
         | (Container::Bitmap(words), Container::Array(values)) => {
-            count_array_bitmap(values, words, limit)
+            visit_array_bitmap_runs(values, words, &mut visitor)
         }
         (Container::Array(values), Container::Run(runs))
-        | (Container::Run(runs), Container::Array(values)) => count_array_runs(values, runs, limit),
+        | (Container::Run(runs), Container::Array(values)) => {
+            visit_array_run_runs(values, runs, &mut visitor)
+        }
         (Container::Bitmap(left_words), Container::Bitmap(right_words)) => {
-            count_bitmap_bitmap(left_words, right_words, limit)
+            visit_bitmap_bitmap_runs(left_words, right_words, &mut visitor)
         }
         (Container::Bitmap(words), Container::Run(runs))
-        | (Container::Run(runs), Container::Bitmap(words)) => count_bitmap_runs(words, runs, limit),
+        | (Container::Run(runs), Container::Bitmap(words)) => {
+            visit_bitmap_run_runs(words, runs, &mut visitor)
+        }
         (Container::Run(left_runs), Container::Run(right_runs)) => {
-            count_run_run(left_runs, right_runs, limit)
+            visit_run_run_runs(left_runs, right_runs, &mut visitor)
         }
     }
 }
 
-fn count_array_array(
+struct CoalescingRunVisitor<'a, F> {
+    pending: Option<Run>,
+    visitor: &'a mut F,
+}
+
+impl<'a, F> CoalescingRunVisitor<'a, F>
+where
+    F: FnMut(Run) -> core::ops::ControlFlow<()>,
+{
+    fn new(visitor: &'a mut F) -> Self {
+        Self {
+            pending: None,
+            visitor,
+        }
+    }
+
+    fn push_value(&mut self, value: u16) -> core::ops::ControlFlow<()> {
+        self.push_run(Run {
+            start: value,
+            end: value,
+        })
+    }
+
+    fn push_run(&mut self, run: Run) -> core::ops::ControlFlow<()> {
+        let Some(pending) = self.pending else {
+            self.pending = Some(run);
+            return core::ops::ControlFlow::Continue(());
+        };
+        if pending
+            .end
+            .checked_add(1)
+            .is_some_and(|next| run.start <= next)
+        {
+            self.pending = Some(Run {
+                start: pending.start,
+                end: pending.end.max(run.end),
+            });
+            return core::ops::ControlFlow::Continue(());
+        }
+        if (self.visitor)(pending).is_break() {
+            return core::ops::ControlFlow::Break(());
+        }
+        self.pending = Some(run);
+        core::ops::ControlFlow::Continue(())
+    }
+
+    fn finish(self) -> core::ops::ControlFlow<()> {
+        self.pending
+            .map_or(core::ops::ControlFlow::Continue(()), |run| {
+                (self.visitor)(run)
+            })
+    }
+}
+
+fn visit_array_array_runs(
     left: &[u16],
     right: &[u16],
-    limit: usize,
-) -> Result<Option<usize>, RoaringError> {
+    visitor: &mut impl FnMut(Run) -> core::ops::ControlFlow<()>,
+) -> core::ops::ControlFlow<()> {
     let mut left_index = 0_usize;
     let mut right_index = 0_usize;
-    let mut count = 0_usize;
+    let mut output = CoalescingRunVisitor::new(visitor);
     while left_index < left.len() && right_index < right.len() {
         match left[left_index].cmp(&right[right_index]) {
             core::cmp::Ordering::Less => left_index += 1,
             core::cmp::Ordering::Greater => right_index += 1,
             core::cmp::Ordering::Equal => {
-                if !add_bounded(&mut count, 1, limit)? {
-                    return Ok(None);
+                if output.push_value(left[left_index]).is_break() {
+                    return core::ops::ControlFlow::Break(());
                 }
                 left_index += 1;
                 right_index += 1;
             }
         }
     }
-    Ok(Some(count))
+    output.finish()
 }
 
-fn count_array_bitmap(
+fn visit_array_bitmap_runs(
     values: &[u16],
     words: &[u64],
-    limit: usize,
-) -> Result<Option<usize>, RoaringError> {
-    let mut count = 0_usize;
+    visitor: &mut impl FnMut(Run) -> core::ops::ControlFlow<()>,
+) -> core::ops::ControlFlow<()> {
+    let mut output = CoalescingRunVisitor::new(visitor);
     for &value in values {
         let index = usize::from(value);
         if words[index / u64::BITS as usize] & (1_u64 << (index % u64::BITS as usize)) != 0
-            && !add_bounded(&mut count, 1, limit)?
+            && output.push_value(value).is_break()
         {
-            return Ok(None);
+            return core::ops::ControlFlow::Break(());
         }
     }
-    Ok(Some(count))
+    output.finish()
 }
 
-fn count_array_runs(
+fn visit_array_run_runs(
     values: &[u16],
     runs: &[Run],
-    limit: usize,
-) -> Result<Option<usize>, RoaringError> {
-    let mut count = 0_usize;
+    visitor: &mut impl FnMut(Run) -> core::ops::ControlFlow<()>,
+) -> core::ops::ControlFlow<()> {
+    let mut output = CoalescingRunVisitor::new(visitor);
     let mut run_index = 0_usize;
     for &value in values {
         while run_index < runs.len() && runs[run_index].end < value {
@@ -1070,34 +1228,33 @@ fn count_array_runs(
         if run_index == runs.len() {
             break;
         }
-        if runs[run_index].start <= value && !add_bounded(&mut count, 1, limit)? {
-            return Ok(None);
+        if runs[run_index].start <= value && output.push_value(value).is_break() {
+            return core::ops::ControlFlow::Break(());
         }
     }
-    Ok(Some(count))
+    output.finish()
 }
 
-fn count_bitmap_bitmap(
+fn visit_bitmap_bitmap_runs(
     left: &[u64],
     right: &[u64],
-    limit: usize,
-) -> Result<Option<usize>, RoaringError> {
-    let mut count = 0_usize;
-    for (&left_word, &right_word) in left.iter().zip(right) {
-        let matches = (left_word & right_word).count_ones() as usize;
-        if !add_bounded(&mut count, matches, limit)? {
-            return Ok(None);
+    visitor: &mut impl FnMut(Run) -> core::ops::ControlFlow<()>,
+) -> core::ops::ControlFlow<()> {
+    let mut output = CoalescingRunVisitor::new(visitor);
+    for (word_index, (&left_word, &right_word)) in left.iter().zip(right).enumerate() {
+        if visit_word_runs(left_word & right_word, word_index, &mut output).is_break() {
+            return core::ops::ControlFlow::Break(());
         }
     }
-    Ok(Some(count))
+    output.finish()
 }
 
-fn count_bitmap_runs(
+fn visit_bitmap_run_runs(
     words: &[u64],
     runs: &[Run],
-    limit: usize,
-) -> Result<Option<usize>, RoaringError> {
-    let mut count = 0_usize;
+    visitor: &mut impl FnMut(Run) -> core::ops::ControlFlow<()>,
+) -> core::ops::ControlFlow<()> {
+    let mut output = CoalescingRunVisitor::new(visitor);
     for run in runs {
         let start = usize::from(run.start);
         let end = usize::from(run.end);
@@ -1106,37 +1263,39 @@ fn count_bitmap_runs(
         for (word_index, &word) in words[first_word..=last_word].iter().enumerate() {
             let absolute_word_index = first_word + word_index;
             let word_start = absolute_word_index * u64::BITS as usize;
-            let from = start.saturating_sub(word_start).min(u64::BITS as usize);
-            let through = end.saturating_sub(word_start).min(u64::BITS as usize - 1);
-            let lower_mask = u64::MAX << from;
-            let upper_mask = if through == u64::BITS as usize - 1 {
-                u64::MAX
-            } else {
-                (1_u64 << (through + 1)) - 1
-            };
-            let matches = (word & lower_mask & upper_mask).count_ones() as usize;
-            if !add_bounded(&mut count, matches, limit)? {
-                return Ok(None);
+            let first_bit = start.saturating_sub(word_start).min(u64::BITS as usize - 1);
+            let last_bit = end.saturating_sub(word_start).min(u64::BITS as usize - 1);
+            let masked = word & inclusive_bit_mask(first_bit, last_bit);
+            if visit_word_runs(masked, absolute_word_index, &mut output).is_break() {
+                return core::ops::ControlFlow::Break(());
             }
         }
     }
-    Ok(Some(count))
+    output.finish()
 }
 
-fn count_run_run(left: &[Run], right: &[Run], limit: usize) -> Result<Option<usize>, RoaringError> {
+fn visit_run_run_runs(
+    left: &[Run],
+    right: &[Run],
+    visitor: &mut impl FnMut(Run) -> core::ops::ControlFlow<()>,
+) -> core::ops::ControlFlow<()> {
     let mut left_index = 0_usize;
     let mut right_index = 0_usize;
-    let mut count = 0_usize;
+    let mut output = CoalescingRunVisitor::new(visitor);
     while left_index < left.len() && right_index < right.len() {
         let left_run = left[left_index];
         let right_run = right[right_index];
         let overlap_start = left_run.start.max(right_run.start);
         let overlap_end = left_run.end.min(right_run.end);
-        if overlap_start <= overlap_end {
-            let overlap = usize::from(overlap_end) - usize::from(overlap_start) + 1;
-            if !add_bounded(&mut count, overlap, limit)? {
-                return Ok(None);
-            }
+        if overlap_start <= overlap_end
+            && output
+                .push_run(Run {
+                    start: overlap_start,
+                    end: overlap_end,
+                })
+                .is_break()
+        {
+            return core::ops::ControlFlow::Break(());
         }
         if left_run.end <= right_run.end {
             left_index += 1;
@@ -1145,39 +1304,34 @@ fn count_run_run(left: &[Run], right: &[Run], limit: usize) -> Result<Option<usi
             right_index += 1;
         }
     }
-    Ok(Some(count))
+    output.finish()
 }
 
-fn add_bounded(count: &mut usize, amount: usize, limit: usize) -> Result<bool, RoaringError> {
-    if amount > limit.saturating_sub(*count) {
-        return Ok(false);
-    }
-    *count = count
-        .checked_add(amount)
-        .ok_or(RoaringError::SizeOverflow {
-            calculation: SizeCalculation::IntersectionCardinality,
-        })?;
-    Ok(true)
-}
-
-fn write_intersection(left: &Container, right: &Container, output: &mut Vec<u16>) {
-    let mut left_values = left.iter().peekable();
-    let mut right_values = right.iter().peekable();
-    while let (Some(&left_value), Some(&right_value)) = (left_values.peek(), right_values.peek()) {
-        match left_value.cmp(&right_value) {
-            core::cmp::Ordering::Less => {
-                left_values.next();
-            }
-            core::cmp::Ordering::Greater => {
-                right_values.next();
-            }
-            core::cmp::Ordering::Equal => {
-                output.push(left_value);
-                left_values.next();
-                right_values.next();
-            }
+fn visit_word_runs(
+    word: u64,
+    word_index: usize,
+    output: &mut CoalescingRunVisitor<'_, impl FnMut(Run) -> core::ops::ControlFlow<()>>,
+) -> core::ops::ControlFlow<()> {
+    let mut remaining = word;
+    while remaining != 0 {
+        let first_bit = remaining.trailing_zeros() as usize;
+        let shifted = remaining >> first_bit;
+        let run_len = shifted.trailing_ones() as usize;
+        let last_bit = first_bit + run_len - 1;
+        let base = word_index * u64::BITS as usize;
+        debug_assert!(base + last_bit <= usize::from(u16::MAX));
+        if output
+            .push_run(Run {
+                start: (base + first_bit) as u16,
+                end: (base + last_bit) as u16,
+            })
+            .is_break()
+        {
+            return core::ops::ControlFlow::Break(());
         }
+        remaining &= !inclusive_bit_mask(first_bit, last_bit);
     }
+    core::ops::ControlFlow::Continue(())
 }
 
 fn high(value: u32) -> u16 {
@@ -1552,6 +1706,157 @@ mod tests {
                 "intersection is reconstructed canonically"
             );
         }
+    }
+
+    #[test]
+    fn every_container_pair_intersection_matches_naive_canonical_output() {
+        let array_values = vec![0, 2, 4, 65_535];
+        let bitmap_values = (0_u32..4097).map(|value| value * 2).collect::<Vec<_>>();
+        let run_values = (0_u32..=u32::from(u16::MAX)).collect::<Vec<_>>();
+        let bitmaps = [
+            build(&array_values),
+            build(&bitmap_values),
+            build(&run_values),
+        ];
+        let values = [&array_values, &bitmap_values, &run_values];
+
+        assert_eq!(bitmaps[0].container_kind(0), Some(ContainerKind::Array));
+        assert_eq!(bitmaps[1].container_kind(0), Some(ContainerKind::Bitmap));
+        assert_eq!(bitmaps[2].container_kind(0), Some(ContainerKind::Run));
+
+        for (left_index, left) in bitmaps.iter().enumerate() {
+            for (right_index, right) in bitmaps.iter().enumerate() {
+                let expected = naive_intersection(values[left_index], values[right_index]);
+                let intersection = left
+                    .intersection(right, EntryLimit::new(expected.len()))
+                    .expect("container-pair intersection");
+                assert_eq!(intersection, build(&expected));
+            }
+        }
+    }
+
+    struct TracingReservation {
+        calls: Vec<(AllocationTarget, usize, Option<u16>)>,
+    }
+
+    impl Reservation for TracingReservation {
+        fn before_reserve(
+            &mut self,
+            target: AllocationTarget,
+            requested: usize,
+            high_key: Option<u16>,
+        ) -> Result<(), RoaringError> {
+            self.calls.push((target, requested, high_key));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn intersection_reserves_only_directory_and_final_canonical_container() {
+        let array = build(&[0, 2, 4]);
+        let bitmap = build(&(0_u32..4097).map(|value| value * 2).collect::<Vec<_>>());
+        let run = build(&(0_u32..=u32::from(u16::MAX)).collect::<Vec<_>>());
+
+        let cases = [
+            (
+                &array,
+                &run,
+                ContainerKind::Array,
+                AllocationTarget::ArrayValues,
+                3_usize,
+            ),
+            (
+                &bitmap,
+                &run,
+                ContainerKind::Bitmap,
+                AllocationTarget::BitmapWords,
+                BITMAP_WORDS,
+            ),
+            (
+                &run,
+                &run,
+                ContainerKind::Run,
+                AllocationTarget::Runs,
+                1_usize,
+            ),
+        ];
+
+        for (left, right, expected_kind, target, requested) in cases {
+            for (left, right) in [(left, right), (right, left)] {
+                let mut reservation = TracingReservation { calls: Vec::new() };
+                let intersection = left
+                    .intersection_with(right, EntryLimit::new(left.len()), &mut reservation)
+                    .expect("direct canonical intersection");
+                assert_eq!(intersection.container_kind(0), Some(expected_kind));
+                assert_eq!(
+                    reservation.calls,
+                    vec![
+                        (AllocationTarget::ChunkDirectory, 1, None),
+                        (target, requested, Some(0)),
+                    ],
+                    "intersection must not reserve a cardinality-sized scratch buffer"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn direct_intersection_allocation_failures_name_the_final_container() {
+        let array = build(&[0, 2, 4]);
+        let bitmap = build(&(0_u32..4097).map(|value| value * 2).collect::<Vec<_>>());
+        let run = build(&(0_u32..=u32::from(u16::MAX)).collect::<Vec<_>>());
+        let cases = [
+            (&array, &run, AllocationTarget::ArrayValues, 3_usize),
+            (&bitmap, &run, AllocationTarget::BitmapWords, BITMAP_WORDS),
+            (&run, &run, AllocationTarget::Runs, 1_usize),
+        ];
+
+        for (left, right, target, requested) in cases {
+            let mut reservation = RecordingReservation {
+                calls: 0,
+                fail_target: Some(target),
+            };
+            assert_eq!(
+                left.intersection_with(right, EntryLimit::new(left.len()), &mut reservation),
+                Err(RoaringError::AllocationFailed {
+                    target,
+                    requested,
+                    high_key: Some(0),
+                })
+            );
+            assert_eq!(reservation.calls, 2);
+        }
+    }
+
+    #[test]
+    fn bitmap_run_intersection_coalesces_runs_across_word_boundaries() {
+        let mut bitmap_values = (0_u32..=u32::from(u16::MAX))
+            .filter(|value| value % 2 == 0)
+            .collect::<Vec<_>>();
+        bitmap_values.extend(60_u32..=70);
+        bitmap_values.extend(127_u32..=130);
+        bitmap_values.sort_unstable();
+        bitmap_values.dedup();
+
+        let mut run_values = (58_u32..=72).collect::<Vec<_>>();
+        run_values.extend(125_u32..=132);
+        let bitmap = build(&bitmap_values);
+        let run = build(&run_values);
+        assert_eq!(bitmap.container_kind(0), Some(ContainerKind::Bitmap));
+        assert_eq!(run.container_kind(0), Some(ContainerKind::Run));
+
+        let expected = naive_intersection(&bitmap_values, &run_values);
+        let intersection = bitmap
+            .intersection(&run, EntryLimit::new(expected.len()))
+            .expect("bitmap/run word-boundary intersection");
+        assert_eq!(intersection, build(&expected));
+        assert_eq!(
+            intersection_summary(&bitmap.chunks[0].container, &run.chunks[0].container),
+            Ok(IntersectionSummary {
+                cardinality: expected.len(),
+                run_count: 5,
+            })
+        );
     }
 
     #[test]

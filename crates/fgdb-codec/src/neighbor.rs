@@ -18,8 +18,9 @@
 //!
 //! Intersections merge compressed access paths and materialize only the sorted
 //! result. Dense/dense intersection operates directly on interval pairs. The
-//! StreamVByte path may repeatedly decode bounded blocks, but never expands a
-//! complete input list.
+//! generic merge retains each current value and caches one bounded
+//! StreamVByte block per input, so a block is decoded at most once per merge
+//! pass without expanding a complete input list.
 
 #![forbid(unsafe_code)]
 
@@ -32,6 +33,27 @@ use crate::elias_fano::{EliasFano, EliasFanoError};
 pub const STREAM_BLOCK_ENTRIES: usize = 128;
 
 const WIDTHS_PER_CONTROL_BYTE: usize = 2;
+
+#[cfg(test)]
+std::thread_local! {
+    static STREAM_BLOCK_DECODE_ATTEMPTS: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_stream_block_decode_attempt() {
+    STREAM_BLOCK_DECODE_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
+}
+
+#[cfg(test)]
+fn reset_stream_block_decode_attempts() {
+    STREAM_BLOCK_DECODE_ATTEMPTS.with(|attempts| attempts.set(0));
+}
+
+#[cfg(test)]
+fn stream_block_decode_attempts() -> usize {
+    STREAM_BLOCK_DECODE_ATTEMPTS.with(core::cell::Cell::get)
+}
 
 /// Closed scalar neighbor representation union.
 ///
@@ -707,6 +729,9 @@ impl StreamVByteNeighbors {
         block_index: usize,
         output: &mut [u64; STREAM_BLOCK_ENTRIES],
     ) -> Result<usize, NeighborError> {
+        #[cfg(test)]
+        record_stream_block_decode_attempt();
+
         let Some(&fence) = self.fences.get(block_index) else {
             return Err(malformed(
                 block_index,
@@ -1190,6 +1215,23 @@ trait SortedNeighbors {
     fn sequence_len(&self) -> usize;
     fn sequence_codec(&self) -> NeighborCodec;
     fn sequence_select(&self, index: usize) -> Option<u64>;
+
+    fn sequence_fill(
+        &self,
+        start: usize,
+        output: &mut [u64; STREAM_BLOCK_ENTRIES],
+    ) -> Result<usize, NeighborError> {
+        if start >= self.sequence_len() {
+            return Ok(0);
+        }
+        output[0] = self
+            .sequence_select(start)
+            .ok_or(NeighborError::InternalValueMissing {
+                codec: self.sequence_codec(),
+                index: start,
+            })?;
+        Ok(1)
+    }
 }
 
 impl SortedNeighbors for EliasFanoNeighbors {
@@ -1218,6 +1260,33 @@ impl SortedNeighbors for StreamVByteNeighbors {
     fn sequence_select(&self, index: usize) -> Option<u64> {
         self.select(index)
     }
+
+    fn sequence_fill(
+        &self,
+        start: usize,
+        output: &mut [u64; STREAM_BLOCK_ENTRIES],
+    ) -> Result<usize, NeighborError> {
+        if start >= self.len {
+            return Ok(0);
+        }
+        let block_index = start / STREAM_BLOCK_ENTRIES;
+        let block_start = block_index * STREAM_BLOCK_ENTRIES;
+        let within_block = start - block_start;
+        let count = self.decode_block_into(block_index, output).map_err(|_| {
+            NeighborError::InternalValueMissing {
+                codec: self.codec(),
+                index: start,
+            }
+        })?;
+        if within_block >= count {
+            return Err(NeighborError::InternalValueMissing {
+                codec: self.codec(),
+                index: start,
+            });
+        }
+        output.copy_within(within_block..count, 0);
+        Ok(count - within_block)
+    }
 }
 
 impl SortedNeighbors for DenseIntervals {
@@ -1245,6 +1314,18 @@ impl SortedNeighbors for EncodedNeighbors {
 
     fn sequence_select(&self, index: usize) -> Option<u64> {
         self.select(index)
+    }
+
+    fn sequence_fill(
+        &self,
+        start: usize,
+        output: &mut [u64; STREAM_BLOCK_ENTRIES],
+    ) -> Result<usize, NeighborError> {
+        match self {
+            Self::EliasFano(values) => values.sequence_fill(start, output),
+            Self::StreamVByte(values) => values.sequence_fill(start, output),
+            Self::DenseIntervals(values) => values.sequence_fill(start, output),
+        }
     }
 }
 
@@ -1321,6 +1402,52 @@ fn intersection_output_exact(
     Ok(output)
 }
 
+struct SequenceCursor<'a, S> {
+    sequence: &'a S,
+    logical_index: usize,
+    buffer_index: usize,
+    buffer_len: usize,
+    buffer: [u64; STREAM_BLOCK_ENTRIES],
+}
+
+impl<'a, S: SortedNeighbors> SequenceCursor<'a, S> {
+    fn new(sequence: &'a S) -> Self {
+        Self {
+            sequence,
+            logical_index: 0,
+            buffer_index: 0,
+            buffer_len: 0,
+            buffer: [0; STREAM_BLOCK_ENTRIES],
+        }
+    }
+
+    fn current(&mut self) -> Result<Option<u64>, NeighborError> {
+        if self.logical_index >= self.sequence.sequence_len() {
+            return Ok(None);
+        }
+        if self.buffer_index == self.buffer_len {
+            self.buffer_len = self
+                .sequence
+                .sequence_fill(self.logical_index, &mut self.buffer)?;
+            self.buffer_index = 0;
+            if self.buffer_len == 0 {
+                return Err(NeighborError::InternalValueMissing {
+                    codec: self.sequence.sequence_codec(),
+                    index: self.logical_index,
+                });
+            }
+        }
+        Ok(Some(self.buffer[self.buffer_index]))
+    }
+
+    fn advance(&mut self) {
+        debug_assert!(self.logical_index < self.sequence.sequence_len());
+        debug_assert!(self.buffer_index < self.buffer_len);
+        self.logical_index += 1;
+        self.buffer_index += 1;
+    }
+}
+
 fn visit_sequence_intersection<L, R>(
     left: &L,
     right: &R,
@@ -1330,29 +1457,19 @@ where
     L: SortedNeighbors,
     R: SortedNeighbors,
 {
-    let mut left_index = 0_usize;
-    let mut right_index = 0_usize;
-    while left_index < left.sequence_len() && right_index < right.sequence_len() {
-        let left_value =
-            left.sequence_select(left_index)
-                .ok_or(NeighborError::InternalValueMissing {
-                    codec: left.sequence_codec(),
-                    index: left_index,
-                })?;
-        let right_value =
-            right
-                .sequence_select(right_index)
-                .ok_or(NeighborError::InternalValueMissing {
-                    codec: right.sequence_codec(),
-                    index: right_index,
-                })?;
+    let mut left = SequenceCursor::new(left);
+    let mut right = SequenceCursor::new(right);
+    while let Some(left_value) = left.current()? {
+        let Some(right_value) = right.current()? else {
+            break;
+        };
         match left_value.cmp(&right_value) {
-            cmp::Ordering::Less => left_index += 1,
-            cmp::Ordering::Greater => right_index += 1,
+            cmp::Ordering::Less => left.advance(),
+            cmp::Ordering::Greater => right.advance(),
             cmp::Ordering::Equal => {
                 visit(left_value)?;
-                left_index += 1;
-                right_index += 1;
+                left.advance();
+                right.advance();
             }
         }
     }
@@ -1388,6 +1505,9 @@ fn intersect_sequences<L: SortedNeighbors, R: SortedNeighbors>(
 ) -> Result<Vec<u64>, NeighborError> {
     let cardinality = sequence_intersection_cardinality(left, right, limit)?;
     let mut output = intersection_output_exact(cardinality, limit)?;
+    if cardinality == 0 {
+        return Ok(output);
+    }
     visit_sequence_intersection(left, right, |value| {
         output.push(value);
         Ok(())
@@ -1957,6 +2077,87 @@ mod tests {
             intersect_dense_intervals(&left_dense, &right_dense, EntryLimit::new(0)).unwrap();
         assert!(dense.is_empty());
         assert_eq!(dense.capacity(), 0);
+    }
+
+    #[test]
+    fn sequence_cursor_retains_the_unadvanced_value_and_skips_empty_replay() {
+        let left_values: Vec<u64> = (0..1_024).collect();
+        let right_values = [10_000];
+        let counted_left = CountingSequence {
+            values: &left_values,
+            selects: core::cell::Cell::new(0),
+            codec: NeighborCodec::EliasFano,
+        };
+        let counted_right = CountingSequence {
+            values: &right_values,
+            selects: core::cell::Cell::new(0),
+            codec: NeighborCodec::DenseIntervals,
+        };
+
+        let output =
+            intersect_sequences(&counted_left, &counted_right, EntryLimit::new(0)).unwrap();
+
+        assert!(output.is_empty());
+        assert_eq!(output.capacity(), 0);
+        assert_eq!(counted_left.selects.get(), left_values.len());
+        assert_eq!(counted_right.selects.get(), 1);
+    }
+
+    #[test]
+    fn stream_intersection_decodes_each_block_at_most_once_per_merge_pass() {
+        let disjoint_left_values: Vec<u64> = (0..(3 * STREAM_BLOCK_ENTRIES + 7))
+            .map(|value| value as u64)
+            .collect();
+        let disjoint_right_values = [10_000_u64];
+        let disjoint_left = StreamVByteNeighbors::try_new(
+            &disjoint_left_values,
+            EntryLimit::new(disjoint_left_values.len()),
+        )
+        .unwrap();
+        let disjoint_right = StreamVByteNeighbors::try_new(
+            &disjoint_right_values,
+            EntryLimit::new(disjoint_right_values.len()),
+        )
+        .unwrap();
+
+        reset_stream_block_decode_attempts();
+        let output =
+            intersect_sequences(&disjoint_left, &disjoint_right, EntryLimit::new(0)).unwrap();
+        assert!(output.is_empty());
+        assert_eq!(
+            stream_block_decode_attempts(),
+            disjoint_left.fences().len() + 1,
+            "an empty result must perform one merge pass and decode each visited block once"
+        );
+
+        let identical_values: Vec<u64> = (0..(2 * STREAM_BLOCK_ENTRIES + 1))
+            .map(|value| value as u64)
+            .collect();
+        let identical_left = StreamVByteNeighbors::try_new(
+            &identical_values,
+            EntryLimit::new(identical_values.len()),
+        )
+        .unwrap();
+        let identical_right = StreamVByteNeighbors::try_new(
+            &identical_values,
+            EntryLimit::new(identical_values.len()),
+        )
+        .unwrap();
+
+        reset_stream_block_decode_attempts();
+        assert_eq!(
+            intersect_sequences(
+                &identical_left,
+                &identical_right,
+                EntryLimit::new(identical_values.len()),
+            ),
+            Ok(identical_values)
+        );
+        assert_eq!(
+            stream_block_decode_attempts(),
+            2 * (identical_left.fences().len() + identical_right.fences().len()),
+            "a nonempty exact-allocation result performs two passes with one decode per block"
+        );
     }
 
     #[test]

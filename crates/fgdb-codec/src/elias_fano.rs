@@ -152,6 +152,8 @@ impl EliasFano {
             });
         }
 
+        let (len_u64, len_rank) = preflight_entry_count(values.len())?;
+
         for (offset, pair) in values.windows(2).enumerate() {
             if pair[0] > pair[1] {
                 return Err(EliasFanoError::NotMonotone {
@@ -174,10 +176,6 @@ impl EliasFano {
             });
         }
 
-        let len_u64 = u64::try_from(values.len()).map_err(|_| EliasFanoError::SizeOverflow {
-            calculation: SizeCalculation::EntryCount,
-        })?;
-        let len_rank = checked_high_word_rank(values.len())?;
         let max_value = values[values.len() - 1];
         let ratio = max_value / len_u64;
         let low_bits = if ratio == 0 {
@@ -453,6 +451,14 @@ fn words_for_bits(bits: usize) -> Option<usize> {
     complete.checked_add(usize::from(!bits.is_multiple_of(64)))
 }
 
+fn preflight_entry_count(entries: usize) -> Result<(u64, u32), EliasFanoError> {
+    let entries_u64 = u64::try_from(entries).map_err(|_| EliasFanoError::SizeOverflow {
+        calculation: SizeCalculation::EntryCount,
+    })?;
+    let high_word_rank = checked_high_word_rank(entries)?;
+    Ok((entries_u64, high_word_rank))
+}
+
 fn checked_high_word_rank(entries: usize) -> Result<u32, EliasFanoError> {
     u32::try_from(entries).map_err(|_| EliasFanoError::SizeOverflow {
         calculation: SizeCalculation::HighWordRank,
@@ -586,10 +592,14 @@ mod tests {
                 current: 2,
             })
         );
+    }
 
-        #[cfg(target_pointer_width = "64")]
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn entry_count_preflight_rejects_rank_overflow_without_a_value_slice() {
+        let entries = u32::MAX as usize + 1;
         assert_eq!(
-            checked_high_word_rank(u32::MAX as usize + 1),
+            preflight_entry_count(entries),
             Err(EliasFanoError::SizeOverflow {
                 calculation: SizeCalculation::HighWordRank,
             })
