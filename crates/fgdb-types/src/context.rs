@@ -1,0 +1,1582 @@
+//! Purpose-typed execution contexts and database obligation vocabulary.
+//!
+//! FrankenGraphDB narrows one runtime-owned [`asupersync::Cx`] at the
+//! composition root and passes only the role wrapper needed by a subsystem.
+//! The wrapped context is deliberately private: downstream code can use the
+//! named database effects below, but cannot recover that wrapped `Cx` through
+//! this API. Asupersync's separate ambient `Cx::current()` surface has a pinned
+//! upstream time/random masking limitation documented on [`RestrictedFuture`].
+//!
+//! The database obligation lifecycle is affine. A live obligation contains an
+//! asupersync graded obligation, so dropping it before [`PurposeObligation::abort`]
+//! or [`PurposeObligation<Cleanup>::complete`] is a detected leak. Lifecycle
+//! evidence is fixed-size and contains only stable enums, a caller-assigned ID,
+//! and a resource count; descriptions, paths, tenant identifiers, and payloads
+//! never enter the evidence surface.
+
+use std::future::Future;
+use std::marker::PhantomData;
+use std::num::NonZeroU64;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::task::{Context, Poll};
+
+use asupersync::Cx;
+use asupersync::cx::cap::{self, CapSet};
+use asupersync::obligation::graded::{GradedObligation, Resolution};
+use asupersync::record::ObligationKind as FoundationObligationKind;
+
+type LocalDatabaseCaps = CapSet<true, true, false, true, false>;
+type ReplicationCaps = CapSet<true, true, false, true, true>;
+
+const FIRST_OBLIGATION_GENERATION: u64 = 1;
+
+#[derive(Debug)]
+struct ObligationTracker {
+    next_generation: AtomicU64,
+    live: AtomicUsize,
+}
+
+impl ObligationTracker {
+    const fn new() -> Self {
+        Self {
+            next_generation: AtomicU64::new(FIRST_OBLIGATION_GENERATION),
+            live: AtomicUsize::new(0),
+        }
+    }
+
+    fn acquire_generation(&self) -> Result<ObligationGeneration, ObligationAcquireFailure> {
+        let generation = self
+            .next_generation
+            .fetch_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |current| match current {
+                    0 => None,
+                    u64::MAX => Some(0),
+                    _ => Some(current + 1),
+                },
+            )
+            .map_err(|_| ObligationAcquireFailure::GenerationExhausted)?;
+        let generation =
+            NonZeroU64::new(generation).ok_or(ObligationAcquireFailure::GenerationExhausted)?;
+        Ok(ObligationGeneration(generation))
+    }
+
+    fn increment_live(&self) -> Result<(), ObligationAcquireFailure> {
+        self.live
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(1)
+            })
+            .map(|_| ())
+            .map_err(|_| ObligationAcquireFailure::LiveCounterExhausted)
+    }
+
+    fn decrement_live(&self) {
+        let decremented = self
+            .live
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_sub(1)
+            });
+        debug_assert!(
+            decremented.is_ok(),
+            "resolved obligation was absent from the local live tracker"
+        );
+    }
+
+    fn live(&self) -> usize {
+        self.live.load(Ordering::Acquire)
+    }
+}
+
+enum RestrictionCx {
+    Local(Cx<LocalDatabaseCaps>),
+    Replication(Cx<ReplicationCaps>),
+    None(Cx<cap::None>),
+}
+
+/// A future whose ambient asupersync capability mask is narrowed for each poll.
+///
+/// The guard is deliberately installed per poll and never crosses an await.
+/// At asupersync revision `e464a48`, ambient `Cx<cap::All>` I/O and remote
+/// accessors honor this runtime mask, but direct time and random accessors do
+/// not. This adapter therefore reduces ambient authority but does not claim to
+/// close that upstream time/random escape. The explicit purpose wrapper remains
+/// the authoritative API passed to delegated code.
+pub struct RestrictedFuture<Fut> {
+    future: Pin<Box<Fut>>,
+    restriction: RestrictionCx,
+}
+
+impl<Fut> RestrictedFuture<Fut> {
+    fn local(future: Fut, cx: Cx<LocalDatabaseCaps>) -> Self {
+        Self {
+            future: Box::pin(future),
+            restriction: RestrictionCx::Local(cx),
+        }
+    }
+
+    fn replication(future: Fut, cx: Cx<ReplicationCaps>) -> Self {
+        Self {
+            future: Box::pin(future),
+            restriction: RestrictionCx::Replication(cx),
+        }
+    }
+
+    fn none(future: Fut, cx: Cx<cap::None>) -> Self {
+        Self {
+            future: Box::pin(future),
+            restriction: RestrictionCx::None(cx),
+        }
+    }
+}
+
+impl<Fut: Future> Future for RestrictedFuture<Fut> {
+    type Output = Fut::Output;
+
+    fn poll(self: Pin<&mut Self>, task: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match &this.restriction {
+            RestrictionCx::Local(cx) => {
+                let _guard = cx.clone().set_current_restricted();
+                this.future.as_mut().poll(task)
+            }
+            RestrictionCx::Replication(cx) => {
+                let _guard = cx.clone().set_current_restricted();
+                this.future.as_mut().poll(task)
+            }
+            RestrictionCx::None(cx) => {
+                let _guard = cx.clone().set_current_restricted();
+                this.future.as_mut().poll(task)
+            }
+        }
+    }
+}
+
+/// Auditable summary of an asupersync type-level capability row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CapabilityRow {
+    pub spawn: bool,
+    pub time: bool,
+    pub random: bool,
+    pub io: bool,
+    pub remote: bool,
+}
+
+/// Capabilities common to local query, transaction, commit, and maintenance
+/// work. The role wrapper further restricts which database effects are named.
+pub const LOCAL_DATABASE_CAPABILITIES: CapabilityRow = CapabilityRow {
+    spawn: true,
+    time: true,
+    random: false,
+    io: true,
+    remote: false,
+};
+
+/// Replication additionally has remote capability, but never ambient entropy.
+pub const REPLICATION_CAPABILITIES: CapabilityRow = CapabilityRow {
+    remote: true,
+    ..LOCAL_DATABASE_CAPABILITIES
+};
+
+/// Merge intent replay has no spawn, clock, entropy, I/O, or remote capability.
+pub const MERGE_EVAL_CAPABILITIES: CapabilityRow = CapabilityRow {
+    spawn: false,
+    time: false,
+    random: false,
+    io: false,
+    remote: false,
+};
+
+/// The sole public boundary that narrows a runtime root context into database
+/// roles. Keep this value at the composition root; subsystems receive one of
+/// its purpose wrappers rather than the set itself.
+#[derive(Clone)]
+pub struct PurposeContexts {
+    query: QueryCx,
+    txn: TxnCx,
+    commit: CommitCx,
+    maint: MaintCx,
+    repl: ReplCx,
+    merge_eval: MergeEvalCx,
+    tracker: Arc<ObligationTracker>,
+}
+
+impl PurposeContexts {
+    /// Monotonically narrows the type-level capability row for every database
+    /// role and drops all type-level effects for deterministic merge evaluation.
+    #[must_use]
+    pub fn narrow_runtime_root(root: &Cx<cap::All>) -> Self {
+        let tracker = Arc::new(ObligationTracker::new());
+        Self {
+            query: QueryCx {
+                inner: root.restrict::<LocalDatabaseCaps>(),
+                tracker: Arc::clone(&tracker),
+            },
+            txn: TxnCx {
+                inner: root.restrict::<LocalDatabaseCaps>(),
+                tracker: Arc::clone(&tracker),
+            },
+            commit: CommitCx {
+                inner: root.restrict::<LocalDatabaseCaps>(),
+                tracker: Arc::clone(&tracker),
+            },
+            maint: MaintCx {
+                inner: root.restrict::<LocalDatabaseCaps>(),
+                tracker: Arc::clone(&tracker),
+            },
+            repl: ReplCx {
+                inner: root.restrict::<ReplicationCaps>(),
+                tracker: Arc::clone(&tracker),
+            },
+            merge_eval: MergeEvalCx {
+                inner: root.restrict::<cap::None>(),
+            },
+            tracker,
+        }
+    }
+
+    /// Number of locally tracked database obligations that have been acquired
+    /// and not yet discharged or aborted.
+    #[must_use]
+    pub fn outstanding_obligations(&self) -> usize {
+        self.tracker.live()
+    }
+
+    #[must_use]
+    pub fn query(&self) -> QueryCx {
+        self.query.clone()
+    }
+
+    #[must_use]
+    pub fn txn(&self) -> TxnCx {
+        self.txn.clone()
+    }
+
+    #[must_use]
+    pub fn commit(&self) -> CommitCx {
+        self.commit.clone()
+    }
+
+    #[must_use]
+    pub fn maint(&self) -> MaintCx {
+        self.maint.clone()
+    }
+
+    #[must_use]
+    pub fn repl(&self) -> ReplCx {
+        self.repl.clone()
+    }
+
+    #[must_use]
+    pub fn merge_eval(&self) -> MergeEvalCx {
+        self.merge_eval.clone()
+    }
+}
+
+/// Query-only effects.
+///
+/// ```compile_fail
+/// use fgdb_types::{ObligationId, PurposeContexts};
+/// fn illegal(contexts: &PurposeContexts) {
+///     let query = contexts.query();
+///     let id = ObligationId::new(1).unwrap();
+///     let bytes = std::num::NonZeroU64::new(1).unwrap();
+///     let _ = query.reserve_prepared_bytes(id, bytes);
+/// }
+/// ```
+#[derive(Clone)]
+pub struct QueryCx {
+    inner: Cx<LocalDatabaseCaps>,
+    tracker: Arc<ObligationTracker>,
+}
+
+impl QueryCx {
+    #[must_use]
+    pub const fn capabilities(&self) -> CapabilityRow {
+        LOCAL_DATABASE_CAPABILITIES
+    }
+
+    pub fn checkpoint(&self) -> Result<(), Box<asupersync::error::Error>> {
+        self.inner.checkpoint().map_err(Box::new)
+    }
+
+    /// Runs synchronous delegated code with the local role mask installed as
+    /// the ambient asupersync restriction for the duration of the call.
+    ///
+    /// Direct ambient time/random access remains an upstream limitation at the
+    /// pinned asupersync revision; callers must still pass only this wrapper.
+    pub fn with_restriction<T>(&self, run: impl FnOnce() -> T) -> T {
+        let _guard = self.inner.clone().set_current_restricted();
+        run()
+    }
+
+    #[must_use]
+    pub fn with_restriction_async<Fut: Future>(&self, future: Fut) -> RestrictedFuture<Fut> {
+        RestrictedFuture::local(future, self.inner.clone())
+    }
+
+    #[must_use]
+    pub fn outstanding_obligations(&self) -> usize {
+        self.tracker.live()
+    }
+
+    pub fn pin_snapshot(
+        &self,
+        id: ObligationId,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Query,
+            DatabaseObligationKind::PinSnapshot,
+            1,
+        )
+    }
+}
+
+/// Transaction effects.
+///
+/// ```compile_fail
+/// use fgdb_types::{ObligationId, PurposeContexts};
+/// fn illegal(contexts: &PurposeContexts) {
+///     let txn = contexts.txn();
+///     let id = ObligationId::new(1).unwrap();
+///     let bytes = std::num::NonZeroU64::new(1).unwrap();
+///     let _ = txn.reserve_raft_payload_space(id, bytes);
+/// }
+/// ```
+#[derive(Clone)]
+pub struct TxnCx {
+    inner: Cx<LocalDatabaseCaps>,
+    tracker: Arc<ObligationTracker>,
+}
+
+impl TxnCx {
+    #[must_use]
+    pub const fn capabilities(&self) -> CapabilityRow {
+        LOCAL_DATABASE_CAPABILITIES
+    }
+
+    pub fn checkpoint(&self) -> Result<(), Box<asupersync::error::Error>> {
+        self.inner.checkpoint().map_err(Box::new)
+    }
+
+    pub fn with_restriction<T>(&self, run: impl FnOnce() -> T) -> T {
+        let _guard = self.inner.clone().set_current_restricted();
+        run()
+    }
+
+    #[must_use]
+    pub fn with_restriction_async<Fut: Future>(&self, future: Fut) -> RestrictedFuture<Fut> {
+        RestrictedFuture::local(future, self.inner.clone())
+    }
+
+    #[must_use]
+    pub fn outstanding_obligations(&self) -> usize {
+        self.tracker.live()
+    }
+
+    pub fn pin_snapshot(
+        &self,
+        id: ObligationId,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Txn,
+            DatabaseObligationKind::PinSnapshot,
+            1,
+        )
+    }
+
+    pub fn reserve_prepared_bytes(
+        &self,
+        id: ObligationId,
+        bytes: NonZeroU64,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Txn,
+            DatabaseObligationKind::ReservePreparedBytes,
+            bytes.get(),
+        )
+    }
+}
+
+/// Commit-coordinator effects.
+///
+/// ```compile_fail
+/// use fgdb_types::{ObligationId, PurposeContexts};
+/// fn illegal(contexts: &PurposeContexts) {
+///     let commit = contexts.commit();
+///     let id = ObligationId::new(1).unwrap();
+///     let _ = commit.pin_snapshot(id);
+/// }
+/// ```
+#[derive(Clone)]
+pub struct CommitCx {
+    inner: Cx<LocalDatabaseCaps>,
+    tracker: Arc<ObligationTracker>,
+}
+
+impl CommitCx {
+    #[must_use]
+    pub const fn capabilities(&self) -> CapabilityRow {
+        LOCAL_DATABASE_CAPABILITIES
+    }
+
+    pub fn checkpoint(&self) -> Result<(), Box<asupersync::error::Error>> {
+        self.inner.checkpoint().map_err(Box::new)
+    }
+
+    pub fn with_restriction<T>(&self, run: impl FnOnce() -> T) -> T {
+        let _guard = self.inner.clone().set_current_restricted();
+        run()
+    }
+
+    #[must_use]
+    pub fn with_restriction_async<Fut: Future>(&self, future: Fut) -> RestrictedFuture<Fut> {
+        RestrictedFuture::local(future, self.inner.clone())
+    }
+
+    #[must_use]
+    pub fn outstanding_obligations(&self) -> usize {
+        self.tracker.live()
+    }
+
+    pub fn reserve_prepared_bytes(
+        &self,
+        id: ObligationId,
+        bytes: NonZeroU64,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Commit,
+            DatabaseObligationKind::ReservePreparedBytes,
+            bytes.get(),
+        )
+    }
+
+    pub fn reserve_raft_payload_space(
+        &self,
+        id: ObligationId,
+        bytes: NonZeroU64,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Commit,
+            DatabaseObligationKind::ReserveRaftPayloadSpace,
+            bytes.get(),
+        )
+    }
+
+    pub fn publish_segment(
+        &self,
+        id: ObligationId,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Commit,
+            DatabaseObligationKind::PublishSegment,
+            1,
+        )
+    }
+}
+
+/// Maintenance effects.
+///
+/// ```compile_fail
+/// use fgdb_types::{ObligationId, PurposeContexts};
+/// fn illegal(contexts: &PurposeContexts) {
+///     let maint = contexts.maint();
+///     let id = ObligationId::new(1).unwrap();
+///     let bytes = std::num::NonZeroU64::new(1).unwrap();
+///     let _ = maint.reserve_prepared_bytes(id, bytes);
+/// }
+/// ```
+#[derive(Clone)]
+pub struct MaintCx {
+    inner: Cx<LocalDatabaseCaps>,
+    tracker: Arc<ObligationTracker>,
+}
+
+impl MaintCx {
+    #[must_use]
+    pub const fn capabilities(&self) -> CapabilityRow {
+        LOCAL_DATABASE_CAPABILITIES
+    }
+
+    pub fn checkpoint(&self) -> Result<(), Box<asupersync::error::Error>> {
+        self.inner.checkpoint().map_err(Box::new)
+    }
+
+    pub fn with_restriction<T>(&self, run: impl FnOnce() -> T) -> T {
+        let _guard = self.inner.clone().set_current_restricted();
+        run()
+    }
+
+    #[must_use]
+    pub fn with_restriction_async<Fut: Future>(&self, future: Fut) -> RestrictedFuture<Fut> {
+        RestrictedFuture::local(future, self.inner.clone())
+    }
+
+    #[must_use]
+    pub fn outstanding_obligations(&self) -> usize {
+        self.tracker.live()
+    }
+
+    pub fn publish_segment(
+        &self,
+        id: ObligationId,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Maint,
+            DatabaseObligationKind::PublishSegment,
+            1,
+        )
+    }
+}
+
+/// Replication effects.
+///
+/// ```compile_fail
+/// use fgdb_types::{ObligationId, PurposeContexts};
+/// fn illegal(contexts: &PurposeContexts) {
+///     let repl = contexts.repl();
+///     let id = ObligationId::new(1).unwrap();
+///     let _ = repl.pin_snapshot(id);
+/// }
+/// ```
+#[derive(Clone)]
+pub struct ReplCx {
+    inner: Cx<ReplicationCaps>,
+    tracker: Arc<ObligationTracker>,
+}
+
+impl ReplCx {
+    #[must_use]
+    pub const fn capabilities(&self) -> CapabilityRow {
+        REPLICATION_CAPABILITIES
+    }
+
+    pub fn checkpoint(&self) -> Result<(), Box<asupersync::error::Error>> {
+        self.inner.checkpoint().map_err(Box::new)
+    }
+
+    pub fn with_restriction<T>(&self, run: impl FnOnce() -> T) -> T {
+        let _guard = self.inner.clone().set_current_restricted();
+        run()
+    }
+
+    #[must_use]
+    pub fn with_restriction_async<Fut: Future>(&self, future: Fut) -> RestrictedFuture<Fut> {
+        RestrictedFuture::replication(future, self.inner.clone())
+    }
+
+    #[must_use]
+    pub fn outstanding_obligations(&self) -> usize {
+        self.tracker.live()
+    }
+
+    pub fn reserve_raft_payload_space(
+        &self,
+        id: ObligationId,
+        bytes: NonZeroU64,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Repl,
+            DatabaseObligationKind::ReserveRaftPayloadSpace,
+            bytes.get(),
+        )
+    }
+
+    pub fn publish_segment(
+        &self,
+        id: ObligationId,
+    ) -> Result<PurposeObligation<Acquired>, ObligationAcquireError> {
+        acquire(
+            &self.inner,
+            Arc::clone(&self.tracker),
+            id,
+            ContextRole::Repl,
+            DatabaseObligationKind::PublishSegment,
+            1,
+        )
+    }
+}
+
+/// Capability-empty context for deterministic intent replay.
+///
+/// The wrapper has no clock, entropy, filesystem/network I/O, spawn, or remote
+/// method, and its private foundation context is statically `cap::None`.
+///
+/// ```compile_fail
+/// use fgdb_types::PurposeContexts;
+/// fn illegal(contexts: &PurposeContexts) {
+///     let merge = contexts.merge_eval();
+///     let _ = merge.now();
+/// }
+/// ```
+#[derive(Clone)]
+pub struct MergeEvalCx {
+    inner: Cx<cap::None>,
+}
+
+impl MergeEvalCx {
+    #[must_use]
+    pub const fn capabilities(&self) -> CapabilityRow {
+        MERGE_EVAL_CAPABILITIES
+    }
+
+    /// Cancellation remains observable even though all effect capabilities
+    /// are absent.
+    pub fn checkpoint(&self) -> Result<(), Box<asupersync::error::Error>> {
+        self.inner.checkpoint().map_err(Box::new)
+    }
+
+    /// Installs the empty runtime mask while synchronous merge evaluation runs.
+    ///
+    /// The pinned asupersync revision does not make its direct ambient
+    /// `Cx<cap::All>` time/random methods consult the runtime mask. This scope
+    /// therefore blocks mask-aware ambient I/O/remote access but is not, by
+    /// itself, a proof against ambient clock or entropy lookup. Merge evaluators
+    /// must receive only `MergeEvalCx`, and must not call `Cx::current()`.
+    pub fn with_restriction<T>(&self, run: impl FnOnce() -> T) -> T {
+        let _guard = self.inner.clone().set_current_restricted();
+        run()
+    }
+
+    #[must_use]
+    pub fn with_restriction_async<Fut: Future>(&self, future: Fut) -> RestrictedFuture<Fut> {
+        RestrictedFuture::none(future, self.inner.clone())
+    }
+}
+
+/// Stable, caller-assigned identity for one database obligation.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ObligationId(NonZeroU64);
+
+impl ObligationId {
+    pub fn new(value: u64) -> Result<Self, InvalidObligationId> {
+        NonZeroU64::new(value).map(Self).ok_or(InvalidObligationId)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Zero is reserved as the absent/uninitialized obligation identity.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InvalidObligationId;
+
+impl std::fmt::Display for InvalidObligationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("obligation ID must be nonzero")
+    }
+}
+
+impl std::error::Error for InvalidObligationId {}
+
+/// Tracker-assigned generation that disambiguates reused caller identities.
+///
+/// There is intentionally no public constructor: generations come only from a
+/// shared [`PurposeContexts`] tracker.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ObligationGeneration(NonZeroU64);
+
+impl ObligationGeneration {
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Registered database-level obligation vocabulary in the W1 foundation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum DatabaseObligationKind {
+    PinSnapshot,
+    ReservePreparedBytes,
+    ReserveRaftPayloadSpace,
+    PublishSegment,
+}
+
+/// The purpose wrapper that was legally able to create an obligation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ContextRole {
+    Query,
+    Txn,
+    Commit,
+    Maint,
+    Repl,
+}
+
+impl DatabaseObligationKind {
+    const fn foundation_kind(self) -> FoundationObligationKind {
+        match self {
+            Self::PinSnapshot => FoundationObligationKind::Lease,
+            Self::ReservePreparedBytes | Self::ReserveRaftPayloadSpace => {
+                FoundationObligationKind::SemaphorePermit
+            }
+            Self::PublishSegment => FoundationObligationKind::IoOp,
+        }
+    }
+
+    const fn redacted_description(self) -> &'static str {
+        match self {
+            Self::PinSnapshot => "fgdb:pin_snapshot",
+            Self::ReservePreparedBytes => "fgdb:reserve_prepared_bytes",
+            Self::ReserveRaftPayloadSpace => "fgdb:reserve_raft_payload_space",
+            Self::PublishSegment => "fgdb:publish_segment",
+        }
+    }
+}
+
+/// Stable lifecycle boundaries used by cancellation tests and replay logs.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ObligationStage {
+    Acquisition,
+    Transfer,
+    Publication,
+    Cleanup,
+    Resolution,
+}
+
+/// Boundary about to be crossed when cancellation was observed.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ObligationBoundary {
+    Acquisition,
+    Transfer,
+    Publication,
+    Cleanup,
+    Completion,
+}
+
+/// How a database obligation was discharged.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ObligationResolution {
+    /// The lifecycle token was legally discharged. This does not, by itself,
+    /// prove that the named database effect executed or became durable.
+    Discharged,
+    Aborted,
+}
+
+/// One fixed-size, secret-free lifecycle record.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ObligationLifecycleEvent {
+    id: ObligationId,
+    generation: ObligationGeneration,
+    task_id: u64,
+    region_id: u64,
+    role: ContextRole,
+    kind: DatabaseObligationKind,
+    stage: ObligationStage,
+    units: u64,
+    resolution: Option<ObligationResolution>,
+}
+
+impl ObligationLifecycleEvent {
+    #[must_use]
+    pub const fn id(&self) -> ObligationId {
+        self.id
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> ObligationGeneration {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn task_id(&self) -> u64 {
+        self.task_id
+    }
+
+    #[must_use]
+    pub const fn region_id(&self) -> u64 {
+        self.region_id
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> ContextRole {
+        self.role
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> DatabaseObligationKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn stage(&self) -> ObligationStage {
+        self.stage
+    }
+
+    #[must_use]
+    pub const fn units(&self) -> u64 {
+        self.units
+    }
+
+    #[must_use]
+    pub const fn resolution(&self) -> Option<ObligationResolution> {
+        self.resolution
+    }
+}
+
+const MAX_OBLIGATION_EVENTS: usize = 5;
+
+struct ObligationCore {
+    /// This foundation token owns one short, fixed vocabulary `String` inside
+    /// asupersync. That bounded foundation allocation is not a RuntimeState
+    /// obligation-table registration and is not visible to LabRuntime's leak
+    /// oracle; `tracker` below is the measured local accounting source.
+    token: GradedObligation,
+    cancel_probe: Cx<cap::None>,
+    tracker: Arc<ObligationTracker>,
+    id: ObligationId,
+    generation: ObligationGeneration,
+    task_id: u64,
+    region_id: u64,
+    role: ContextRole,
+    kind: DatabaseObligationKind,
+    units: u64,
+    events: [Option<ObligationLifecycleEvent>; MAX_OBLIGATION_EVENTS],
+    event_count: usize,
+}
+
+impl ObligationCore {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        cancel_probe: Cx<cap::None>,
+        tracker: Arc<ObligationTracker>,
+        id: ObligationId,
+        generation: ObligationGeneration,
+        task_id: u64,
+        region_id: u64,
+        role: ContextRole,
+        kind: DatabaseObligationKind,
+        units: u64,
+    ) -> Self {
+        let token = GradedObligation::reserve(kind.foundation_kind(), kind.redacted_description());
+        let mut core = Self {
+            token,
+            cancel_probe,
+            tracker,
+            id,
+            generation,
+            task_id,
+            region_id,
+            role,
+            kind,
+            units,
+            events: [None; MAX_OBLIGATION_EVENTS],
+            event_count: 0,
+        };
+        core.record(ObligationStage::Acquisition, None);
+        core
+    }
+
+    fn record(&mut self, stage: ObligationStage, resolution: Option<ObligationResolution>) {
+        debug_assert!(self.event_count < MAX_OBLIGATION_EVENTS);
+        self.events[self.event_count] = Some(ObligationLifecycleEvent {
+            id: self.id,
+            generation: self.generation,
+            task_id: self.task_id,
+            region_id: self.region_id,
+            role: self.role,
+            kind: self.kind,
+            stage,
+            units: self.units,
+            resolution,
+        });
+        self.event_count += 1;
+    }
+
+    fn resolve(mut self, resolution: ObligationResolution) -> ObligationReceipt {
+        self.record(ObligationStage::Resolution, Some(resolution));
+        let foundation_resolution = match resolution {
+            ObligationResolution::Discharged => Resolution::Commit,
+            ObligationResolution::Aborted => Resolution::Abort,
+        };
+        let _proof = self.token.resolve(foundation_resolution);
+        self.tracker.decrement_live();
+        ObligationReceipt {
+            id: self.id,
+            generation: self.generation,
+            task_id: self.task_id,
+            region_id: self.region_id,
+            role: self.role,
+            kind: self.kind,
+            units: self.units,
+            resolution,
+            events: self.events,
+            event_count: self.event_count,
+        }
+    }
+}
+
+/// Obligation immediately after acquisition.
+#[derive(Debug)]
+pub enum Acquired {}
+/// Obligation after ownership/resource transfer.
+#[derive(Debug)]
+pub enum Transferred {}
+/// Obligation after the publication boundary.
+#[derive(Debug)]
+pub enum Published {}
+/// Obligation after deterministic cleanup is complete.
+#[derive(Debug)]
+pub enum Cleanup {}
+
+/// Affine database obligation. The state parameter makes boundary order
+/// unrepresentable out of sequence.
+#[must_use = "database obligations must be completed or aborted"]
+pub struct PurposeObligation<State> {
+    core: ObligationCore,
+    _state: PhantomData<State>,
+}
+
+impl<State> PurposeObligation<State> {
+    fn transition<Next>(
+        mut self,
+        boundary: ObligationBoundary,
+        stage: ObligationStage,
+    ) -> Result<PurposeObligation<Next>, ObligationCancellationError> {
+        if let Err(source) = self.core.cancel_probe.checkpoint() {
+            let receipt = self.core.resolve(ObligationResolution::Aborted);
+            return Err(ObligationCancellationError {
+                source: Box::new(source),
+                attempted_boundary: boundary,
+                receipt: Box::new(receipt),
+            });
+        }
+        self.core.record(stage, None);
+        Ok(PurposeObligation {
+            core: self.core,
+            _state: PhantomData,
+        })
+    }
+
+    /// Cancellation at any live boundary deterministically aborts the
+    /// foundation obligation and returns its complete redacted evidence.
+    #[must_use]
+    pub fn abort(self) -> ObligationReceipt {
+        self.core.resolve(ObligationResolution::Aborted)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> ObligationId {
+        self.core.id
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> DatabaseObligationKind {
+        self.core.kind
+    }
+}
+
+impl PurposeObligation<Acquired> {
+    pub fn transfer(self) -> Result<PurposeObligation<Transferred>, ObligationCancellationError> {
+        self.transition(ObligationBoundary::Transfer, ObligationStage::Transfer)
+    }
+}
+
+impl PurposeObligation<Transferred> {
+    pub fn publish(self) -> Result<PurposeObligation<Published>, ObligationCancellationError> {
+        self.transition(
+            ObligationBoundary::Publication,
+            ObligationStage::Publication,
+        )
+    }
+}
+
+impl PurposeObligation<Published> {
+    pub fn cleanup(self) -> Result<PurposeObligation<Cleanup>, ObligationCancellationError> {
+        self.transition(ObligationBoundary::Cleanup, ObligationStage::Cleanup)
+    }
+}
+
+impl PurposeObligation<Cleanup> {
+    pub fn complete(self) -> Result<ObligationReceipt, ObligationCancellationError> {
+        if let Err(source) = self.core.cancel_probe.checkpoint() {
+            let receipt = self.core.resolve(ObligationResolution::Aborted);
+            return Err(ObligationCancellationError {
+                source: Box::new(source),
+                attempted_boundary: ObligationBoundary::Completion,
+                receipt: Box::new(receipt),
+            });
+        }
+        Ok(self.core.resolve(ObligationResolution::Discharged))
+    }
+}
+
+/// Complete, fixed-size proof that one obligation's local lifecycle token
+/// reached a terminal state.
+///
+/// This proves discharge or abort of the obligation token only. It is not
+/// evidence that the named database effect executed, became visible, or became
+/// durable; those claims require their operation-specific receipts.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ObligationReceipt {
+    id: ObligationId,
+    generation: ObligationGeneration,
+    task_id: u64,
+    region_id: u64,
+    role: ContextRole,
+    kind: DatabaseObligationKind,
+    units: u64,
+    resolution: ObligationResolution,
+    events: [Option<ObligationLifecycleEvent>; MAX_OBLIGATION_EVENTS],
+    event_count: usize,
+}
+
+impl ObligationReceipt {
+    #[must_use]
+    pub const fn id(&self) -> ObligationId {
+        self.id
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> ObligationGeneration {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn task_id(&self) -> u64 {
+        self.task_id
+    }
+
+    #[must_use]
+    pub const fn region_id(&self) -> u64 {
+        self.region_id
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> ContextRole {
+        self.role
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> DatabaseObligationKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn units(&self) -> u64 {
+        self.units
+    }
+
+    #[must_use]
+    pub const fn resolution(&self) -> ObligationResolution {
+        self.resolution
+    }
+
+    pub fn events(&self) -> impl DoubleEndedIterator<Item = &ObligationLifecycleEvent> + '_ {
+        self.events[..self.event_count]
+            .iter()
+            .filter_map(Option::as_ref)
+    }
+}
+
+/// Cancellation observed while attempting to cross a live obligation boundary.
+///
+/// The contained receipt is always terminal and aborted; callers can retain it
+/// as ordered redacted evidence without risking an armed-token drop.
+#[derive(Debug)]
+pub struct ObligationCancellationError {
+    source: Box<asupersync::error::Error>,
+    attempted_boundary: ObligationBoundary,
+    receipt: Box<ObligationReceipt>,
+}
+
+impl ObligationCancellationError {
+    #[must_use]
+    pub const fn attempted_boundary(&self) -> ObligationBoundary {
+        self.attempted_boundary
+    }
+
+    #[must_use]
+    pub fn receipt(&self) -> &ObligationReceipt {
+        self.receipt.as_ref()
+    }
+
+    #[must_use]
+    pub fn into_receipt(self) -> ObligationReceipt {
+        *self.receipt
+    }
+}
+
+impl std::fmt::Display for ObligationCancellationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "context cancelled at {:?} obligation boundary: {}",
+            self.attempted_boundary, self.source
+        )
+    }
+}
+
+impl std::error::Error for ObligationCancellationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+/// Cancellation observed before a foundation obligation was armed.
+#[derive(Debug)]
+pub enum ObligationAcquireError {
+    Cancelled {
+        source: Box<asupersync::error::Error>,
+    },
+    GenerationExhausted,
+    LiveCounterExhausted,
+}
+
+impl ObligationAcquireError {
+    #[must_use]
+    pub const fn attempted_boundary(&self) -> ObligationBoundary {
+        ObligationBoundary::Acquisition
+    }
+
+    #[must_use]
+    pub fn into_source(self) -> Option<asupersync::error::Error> {
+        match self {
+            Self::Cancelled { source } => Some(*source),
+            Self::GenerationExhausted | Self::LiveCounterExhausted => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ObligationAcquireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled { source } => write!(
+                f,
+                "context cancelled before obligation acquisition: {source}"
+            ),
+            Self::GenerationExhausted => f.write_str("obligation generation space exhausted"),
+            Self::LiveCounterExhausted => f.write_str("live obligation counter exhausted"),
+        }
+    }
+}
+
+impl std::error::Error for ObligationAcquireError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Cancelled { source } => Some(source.as_ref()),
+            Self::GenerationExhausted | Self::LiveCounterExhausted => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ObligationAcquireFailure {
+    GenerationExhausted,
+    LiveCounterExhausted,
+}
+
+impl From<ObligationAcquireFailure> for ObligationAcquireError {
+    fn from(failure: ObligationAcquireFailure) -> Self {
+        match failure {
+            ObligationAcquireFailure::GenerationExhausted => Self::GenerationExhausted,
+            ObligationAcquireFailure::LiveCounterExhausted => Self::LiveCounterExhausted,
+        }
+    }
+}
+
+fn acquire<Caps>(
+    cx: &Cx<Caps>,
+    tracker: Arc<ObligationTracker>,
+    id: ObligationId,
+    role: ContextRole,
+    kind: DatabaseObligationKind,
+    units: u64,
+) -> Result<PurposeObligation<Acquired>, ObligationAcquireError>
+where
+    cap::None: cap::SubsetOf<Caps>,
+{
+    cx.checkpoint()
+        .map_err(|source| ObligationAcquireError::Cancelled {
+            source: Box::new(source),
+        })?;
+    let generation = tracker.acquire_generation()?;
+    tracker.increment_live()?;
+    let cancel_probe = cx.restrict::<cap::None>();
+    Ok(PurposeObligation {
+        core: ObligationCore::new(
+            cancel_probe,
+            tracker,
+            id,
+            generation,
+            cx.task_id().as_u64(),
+            cx.region_id().as_u64(),
+            role,
+            kind,
+            units,
+        ),
+        _state: PhantomData,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use asupersync::lab::{LabRunReport, run_async_under_lab};
+    use asupersync::runtime::JoinError;
+    use asupersync::{CancelKind, CancelReason};
+
+    fn assert_clean_lab_report(report: &LabRunReport) {
+        assert!(report.quiescent, "lab run did not quiesce: {report:?}");
+        assert!(
+            report.oracle_report.total > 0,
+            "lab run produced no oracle coverage: {report:?}"
+        );
+        assert!(
+            report.oracle_report.all_passed(),
+            "lab oracle failed: {report:?}"
+        );
+        for invariant in ["obligation_leak", "quiescence"] {
+            let entry = report
+                .oracle_report
+                .entry(invariant)
+                .unwrap_or_else(|| panic!("lab report omitted {invariant}: {report:?}"));
+            assert!(entry.passed, "lab oracle {invariant} failed: {report:?}");
+        }
+        assert!(
+            report.invariant_violations.is_empty(),
+            "lab invariant violation: {report:?}"
+        );
+    }
+
+    fn under_lab<T, F>(seed: u64, test: F) -> T
+    where
+        T: Send + 'static,
+        F: FnOnce(PurposeContexts, Cx) -> T + Send + 'static,
+    {
+        let (output, report) = run_async_under_lab(seed, |root| async move {
+            let contexts = PurposeContexts::narrow_runtime_root(&root);
+            test(contexts, root)
+        });
+        assert_clean_lab_report(&report);
+        output
+    }
+
+    fn under_cancelled_lab<F>(seed: u64, test: F)
+    where
+        F: FnOnce(PurposeContexts, Cx) + Send + 'static,
+    {
+        let ((), report) = run_async_under_lab(seed, |root| async move {
+            let mut handle = root
+                .spawn(move |child| async move {
+                    let contexts = PurposeContexts::narrow_runtime_root(&child);
+                    test(contexts, child);
+                })
+                .expect("lab child spawn must be available");
+            let joined = handle.join(&root).await;
+            assert!(
+                matches!(joined, Err(JoinError::Cancelled(_))),
+                "cancelled lab child returned unexpected join result: {joined:?}"
+            );
+        });
+        assert_clean_lab_report(&report);
+    }
+
+    fn id(value: u64) -> ObligationId {
+        ObligationId::new(value).unwrap()
+    }
+
+    fn bytes(value: u64) -> NonZeroU64 {
+        NonZeroU64::new(value).unwrap()
+    }
+
+    fn stages(receipt: &ObligationReceipt) -> Vec<ObligationStage> {
+        receipt
+            .events()
+            .map(ObligationLifecycleEvent::stage)
+            .collect()
+    }
+
+    fn cancel(root: &Cx, boundary: ObligationBoundary) {
+        let message = match boundary {
+            ObligationBoundary::Acquisition => "cancel at acquisition fixture",
+            ObligationBoundary::Transfer => "cancel at transfer fixture",
+            ObligationBoundary::Publication => "cancel at publication fixture",
+            ObligationBoundary::Cleanup => "cancel at cleanup fixture",
+            ObligationBoundary::Completion => "cancel at completion fixture",
+        };
+        root.set_cancel_reason(CancelReason::new(CancelKind::User).with_message(message));
+    }
+
+    fn cancellation_error<T>(
+        result: Result<T, ObligationCancellationError>,
+    ) -> ObligationCancellationError {
+        match result {
+            Ok(_) => panic!("cancelled boundary unexpectedly succeeded"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn capability_rows_are_narrow_and_merge_is_empty() {
+        under_lab(1, |contexts, _root| {
+            assert_eq!(contexts.query().capabilities(), LOCAL_DATABASE_CAPABILITIES);
+            assert_eq!(contexts.txn().capabilities(), LOCAL_DATABASE_CAPABILITIES);
+            assert_eq!(
+                contexts.commit().capabilities(),
+                LOCAL_DATABASE_CAPABILITIES
+            );
+            assert_eq!(contexts.maint().capabilities(), LOCAL_DATABASE_CAPABILITIES);
+            assert_eq!(contexts.repl().capabilities(), REPLICATION_CAPABILITIES);
+            assert_eq!(
+                contexts.merge_eval().capabilities(),
+                MERGE_EVAL_CAPABILITIES
+            );
+            assert!(!contexts.query().capabilities().random);
+            assert!(!contexts.repl().capabilities().random);
+            assert!(!contexts.merge_eval().capabilities().time);
+            assert!(!contexts.merge_eval().capabilities().io);
+            assert!(!contexts.merge_eval().capabilities().remote);
+
+            fn requires_none(_: &Cx<cap::None>) {}
+            requires_none(&contexts.merge_eval.inner);
+        });
+    }
+
+    #[test]
+    fn role_methods_create_the_registered_obligation_kinds() {
+        under_lab(2, |contexts, _root| {
+            let cases = [
+                contexts.query().pin_snapshot(id(1)).unwrap(),
+                contexts
+                    .txn()
+                    .reserve_prepared_bytes(id(2), bytes(64))
+                    .unwrap(),
+                contexts
+                    .commit()
+                    .reserve_raft_payload_space(id(3), bytes(128))
+                    .unwrap(),
+                contexts.maint().publish_segment(id(4)).unwrap(),
+                contexts.repl().publish_segment(id(5)).unwrap(),
+            ];
+            let kinds: Vec<_> = cases.iter().map(PurposeObligation::kind).collect();
+            assert_eq!(
+                kinds,
+                [
+                    DatabaseObligationKind::PinSnapshot,
+                    DatabaseObligationKind::ReservePreparedBytes,
+                    DatabaseObligationKind::ReserveRaftPayloadSpace,
+                    DatabaseObligationKind::PublishSegment,
+                    DatabaseObligationKind::PublishSegment,
+                ]
+            );
+            for obligation in cases {
+                let _receipt = obligation.abort();
+            }
+            assert_eq!(contexts.outstanding_obligations(), 0);
+        });
+    }
+
+    #[test]
+    fn cancellation_at_every_boundary_resolves_without_leaks() {
+        under_cancelled_lab(30, |contexts, root| {
+            cancel(&root, ObligationBoundary::Acquisition);
+            let error = match contexts.query().pin_snapshot(id(10)) {
+                Ok(obligation) => {
+                    let _receipt = obligation.abort();
+                    panic!("cancelled acquisition unexpectedly succeeded")
+                }
+                Err(error) => error,
+            };
+            assert_eq!(error.attempted_boundary(), ObligationBoundary::Acquisition);
+            assert_eq!(contexts.outstanding_obligations(), 0);
+        });
+
+        under_cancelled_lab(31, |contexts, root| {
+            let obligation = contexts.query().pin_snapshot(id(11)).unwrap();
+            assert_eq!(contexts.outstanding_obligations(), 1);
+            cancel(&root, ObligationBoundary::Transfer);
+            let error = cancellation_error(obligation.transfer());
+            assert_eq!(error.attempted_boundary(), ObligationBoundary::Transfer);
+            let receipt = error.into_receipt();
+            assert_eq!(
+                stages(&receipt),
+                [ObligationStage::Acquisition, ObligationStage::Resolution]
+            );
+            assert_eq!(receipt.resolution(), ObligationResolution::Aborted);
+            assert_eq!(contexts.outstanding_obligations(), 0);
+        });
+
+        under_cancelled_lab(32, |contexts, root| {
+            let obligation = contexts
+                .query()
+                .pin_snapshot(id(12))
+                .unwrap()
+                .transfer()
+                .unwrap();
+            cancel(&root, ObligationBoundary::Publication);
+            let error = cancellation_error(obligation.publish());
+            assert_eq!(error.attempted_boundary(), ObligationBoundary::Publication);
+            let receipt = error.into_receipt();
+            assert_eq!(
+                stages(&receipt),
+                [
+                    ObligationStage::Acquisition,
+                    ObligationStage::Transfer,
+                    ObligationStage::Resolution,
+                ]
+            );
+            assert_eq!(contexts.outstanding_obligations(), 0);
+        });
+
+        under_cancelled_lab(33, |contexts, root| {
+            let obligation = contexts
+                .query()
+                .pin_snapshot(id(13))
+                .unwrap()
+                .transfer()
+                .unwrap()
+                .publish()
+                .unwrap();
+            cancel(&root, ObligationBoundary::Cleanup);
+            let error = cancellation_error(obligation.cleanup());
+            assert_eq!(error.attempted_boundary(), ObligationBoundary::Cleanup);
+            let receipt = error.into_receipt();
+            assert_eq!(
+                stages(&receipt),
+                [
+                    ObligationStage::Acquisition,
+                    ObligationStage::Transfer,
+                    ObligationStage::Publication,
+                    ObligationStage::Resolution,
+                ]
+            );
+            assert_eq!(contexts.outstanding_obligations(), 0);
+        });
+
+        under_cancelled_lab(34, |contexts, root| {
+            let obligation = contexts
+                .query()
+                .pin_snapshot(id(14))
+                .unwrap()
+                .transfer()
+                .unwrap()
+                .publish()
+                .unwrap()
+                .cleanup()
+                .unwrap();
+            cancel(&root, ObligationBoundary::Completion);
+            let error = cancellation_error(obligation.complete());
+            assert_eq!(error.attempted_boundary(), ObligationBoundary::Completion);
+            assert_eq!(error.receipt().resolution(), ObligationResolution::Aborted);
+            assert_eq!(contexts.outstanding_obligations(), 0);
+        });
+    }
+
+    #[test]
+    fn complete_lifecycle_is_ordered_and_redacted() {
+        under_lab(4, |contexts, _root| {
+            let receipt = contexts
+                .commit()
+                .reserve_prepared_bytes(id(21), bytes(4096))
+                .unwrap()
+                .transfer()
+                .unwrap()
+                .publish()
+                .unwrap()
+                .cleanup()
+                .unwrap()
+                .complete()
+                .unwrap();
+            assert_eq!(receipt.id(), id(21));
+            assert_eq!(receipt.units(), 4096);
+            assert_eq!(receipt.resolution(), ObligationResolution::Discharged);
+            assert_eq!(contexts.outstanding_obligations(), 0);
+            assert_eq!(
+                stages(&receipt),
+                [
+                    ObligationStage::Acquisition,
+                    ObligationStage::Transfer,
+                    ObligationStage::Publication,
+                    ObligationStage::Cleanup,
+                    ObligationStage::Resolution,
+                ]
+            );
+            let debug = format!("{:?}", receipt.events().collect::<Vec<_>>());
+            for forbidden in ["path", "tenant", "payload", "description"] {
+                assert!(!debug.contains(forbidden));
+            }
+        });
+    }
+
+    #[test]
+    fn cancellation_before_acquisition_arms_no_obligation() {
+        under_cancelled_lab(5, |contexts, root| {
+            root.set_cancel_reason(
+                CancelReason::new(CancelKind::User).with_message("context fixture cancellation"),
+            );
+            let error = match contexts.query().pin_snapshot(id(30)) {
+                Ok(obligation) => {
+                    let _receipt = obligation.abort();
+                    panic!("cancelled context unexpectedly acquired an obligation")
+                }
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("cancelled before obligation acquisition")
+            );
+        });
+    }
+
+    #[test]
+    fn zero_obligation_identity_is_rejected() {
+        assert_eq!(ObligationId::new(0), Err(InvalidObligationId));
+    }
+
+    #[test]
+    fn tracker_counts_live_obligations_and_assigns_unique_generations() {
+        under_lab(6, |contexts, _root| {
+            let first = contexts.query().pin_snapshot(id(40)).unwrap();
+            let second = contexts.query().pin_snapshot(id(40)).unwrap();
+            assert_eq!(contexts.outstanding_obligations(), 2);
+
+            let first_receipt = first.abort();
+            assert_eq!(contexts.outstanding_obligations(), 1);
+            let second_receipt = second.abort();
+            assert_eq!(contexts.outstanding_obligations(), 0);
+            assert_ne!(first_receipt.generation(), second_receipt.generation());
+            assert_eq!(first_receipt.task_id(), second_receipt.task_id());
+            assert_eq!(first_receipt.region_id(), second_receipt.region_id());
+        });
+    }
+
+    #[test]
+    fn synchronous_scope_installs_an_ambient_restriction() {
+        under_lab(7, |contexts, _root| {
+            assert!(!Cx::is_restricted());
+            contexts.merge_eval().with_restriction(|| {
+                assert!(Cx::is_restricted());
+            });
+            assert!(!Cx::is_restricted());
+        });
+    }
+}

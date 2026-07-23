@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bytes;
+pub mod context;
 pub mod decimal;
 pub mod ids;
 pub mod refs;
@@ -17,6 +18,14 @@ pub mod temporal;
 pub mod text;
 
 pub use bytes::{BoundedBytes, BoundedBytesError};
+pub use context::{
+    Acquired, CapabilityRow, Cleanup, CommitCx, ContextRole, DatabaseObligationKind,
+    InvalidObligationId, LOCAL_DATABASE_CAPABILITIES, MERGE_EVAL_CAPABILITIES, MaintCx,
+    MergeEvalCx, ObligationAcquireError, ObligationBoundary, ObligationCancellationError,
+    ObligationGeneration, ObligationId, ObligationLifecycleEvent, ObligationReceipt,
+    ObligationResolution, ObligationStage, Published, PurposeContexts, PurposeObligation, QueryCx,
+    REPLICATION_CAPABILITIES, ReplCx, RestrictedFuture, Transferred, TxnCx,
+};
 pub use decimal::{
     CanonicalDecimal, DecimalDecodeError, DecimalError, DecimalOperation, MAX_DECIMAL_COEFFICIENT,
     MIN_DECIMAL_COEFFICIENT, STRICT_PORTABLE_DECIMAL_PRECISION, STRICT_PORTABLE_DECIMAL_SCALE,

@@ -2,8 +2,8 @@
 //! foundation crate (bead `fgdb-w1-foundation-types-tjk`).
 //!
 //! The output is a line-oriented transcript that must be byte-identical
-//! across runs (`scripts/w1_foundation_types_e2e.sh` runs it twice and
-//! `cmp`s). It exercises, in order: every canonical scalar variant under
+//! across lab seeds (`scripts/w1_foundation_types_e2e.sh` runs it with two
+//! seeds and `cmp`s the results). It exercises, in order: every canonical scalar variant under
 //! `STRICT_PORTABLE` (round trip + typed malformed rejections), a `ZWeight`
 //! promotion across the `i128` boundary into `fgdb-bigint` and back, every
 //! delta-row arm into a `LogicalDeltaTemplate` and — via a committed marker —
@@ -13,10 +13,11 @@
 //! The final line is an FNV-1a digest of the whole transcript (std-only,
 //! stable across processes and toolchains, unlike `DefaultHasher`).
 //!
-//! Lab-runtime (fgdb-sim) integration replaces this direct harness when
-//! `fgdb-verif-sim` lands; determinism-under-two-seeds is what this stage
-//! can honestly assert.
+//! The harness runs directly under asupersync's lab runtime. `fgdb-verif-sim`
+//! will later supply the database-specific VFS, chaos, and DPOR campaign;
+//! determinism and quiescence under two seeds are what this stage asserts.
 
+use asupersync::lab::run_async_under_lab;
 use fgdb_bigint::{BigInt, LimbLimit};
 use fgdb_claim::{EvidenceClaim, RefinementStatus, RegistryClaimClass, class, justify};
 use fgdb_delta_types::{
@@ -24,15 +25,19 @@ use fgdb_delta_types::{
     LogicalDeltaBatch, LogicalDeltaTemplate, OperationKey, PropertyKeyId, RelationId, SchemaEpoch,
     ValidTimePeriod,
 };
-use fgdb_evidence::{CalibrationWindow, EvidenceEnvelope, FallbackBehavior};
+use fgdb_evidence::{
+    CalibrationWindow, EvidenceEnvelope, FallbackBehavior, ReplayClass, ReplayCompleteness,
+};
 use fgdb_resource::{ResourceCeiling, ResourceVector};
 use fgdb_types::{
     BranchId, CanonicalDecimal, CanonicalF64, CanonicalScalar, CanonicalText, CanonicalTimestamp,
     CollationResolver, CollationResolverError, CommitSeq, EId, GraphId, MAX_DECIMAL_COEFFICIENT,
-    MarkerRef, NonBinaryTextBinding, ObjectId, TzdbResolver, VId,
+    MarkerRef, NonBinaryTextBinding, ObjectId, ObligationId, ObligationResolution, ObligationStage,
+    PurposeContexts, TzdbResolver, VId,
 };
 
 const ZONED_FIXTURE_INSTANT: i128 = 1_735_689_600_123_456_789;
+const DEFAULT_LAB_SEED: u64 = 0x000F_00D4_1999;
 
 struct FoundationResolver {
     available: bool,
@@ -147,10 +152,46 @@ fn oid(fill: u8) -> ObjectId {
 }
 
 fn main() {
+    let seed = match std::env::args().nth(1) {
+        Some(value) => value.parse::<u64>().expect("lab seed must be a u64"),
+        None => DEFAULT_LAB_SEED,
+    };
+    let ((), report) = run_async_under_lab(seed, |root| async move {
+        run_transcript(&root);
+    });
+    assert!(
+        report.quiescent,
+        "foundation lab run did not quiesce: {report:?}"
+    );
+    assert!(
+        report.oracle_report.total > 0,
+        "foundation lab run produced no oracle coverage: {report:?}"
+    );
+    assert!(
+        report.oracle_report.all_passed(),
+        "foundation lab oracle failed: {report:?}"
+    );
+    for invariant in ["obligation_leak", "quiescence"] {
+        let entry = report
+            .oracle_report
+            .entry(invariant)
+            .unwrap_or_else(|| panic!("foundation lab report omitted {invariant}: {report:?}"));
+        assert!(
+            entry.passed,
+            "foundation lab oracle {invariant} failed: {report:?}"
+        );
+    }
+    assert!(
+        report.invariant_violations.is_empty(),
+        "foundation lab invariant violation: {report:?}"
+    );
+}
+
+fn run_transcript(root: &asupersync::Cx) {
     let mut t = Transcript {
         digest: Fnv1a::new(),
     };
-    t.emit("== foundation_types_e2e transcript v3 ==");
+    t.emit("== foundation_types_e2e transcript v4 ==");
 
     // 1. Canonical scalars: every variant, encode/decode round trip.
     let text_binding = NonBinaryTextBinding::new(oid(0x31), oid(0x32), oid(0x33), oid(0x34));
@@ -503,6 +544,79 @@ fn main() {
     };
     t.emit(&format!(
         "admitted {admitted} steps; rejection (typed): {rejection}"
+    ));
+
+    // 6. Shared replay grading and narrowed-Cx obligations under the lab.
+    let replayable = ReplayCompleteness::replayable();
+    let structural = ReplayCompleteness::structural_replay(
+        [
+            ReplayClass::LogicalState,
+            ReplayClass::StructuralControlFlow,
+        ],
+        [ReplayClass::MediatedExternalInputs],
+    )
+    .expect("canonical structural replay fixture");
+    let verifiable = ReplayCompleteness::verifiable_if_artifacts_supplied([
+        ReplayClass::ExecutableBinary,
+        ReplayClass::LogicalState,
+    ])
+    .expect("canonical missing-artifact fixture");
+    let audit = structural
+        .weaken_for_redaction([ReplayClass::KeyMaterial])
+        .expect("bounded redaction fixture");
+    t.emit(&format!(
+        "replay grades: replayable={}; structural reproduced={} omitted={}; verifiable missing={}; audit missing_or_redacted={}",
+        matches!(replayable, ReplayCompleteness::Replayable),
+        structural.reproduced_classes().map_or(0, |set| set.len()),
+        structural.omitted_classes().map_or(0, |set| set.len()),
+        verifiable.missing_classes().map_or(0, |set| set.len()),
+        audit
+            .missing_or_redacted_classes()
+            .map_or(0, |set| set.len()),
+    ));
+
+    let contexts = PurposeContexts::narrow_runtime_root(root);
+    let obligation = contexts
+        .commit()
+        .reserve_prepared_bytes(
+            ObligationId::new(0x0004_1999).expect("nonzero obligation fixture"),
+            std::num::NonZeroU64::new(4096).expect("nonzero byte fixture"),
+        )
+        .expect("live lab context");
+    let receipt = obligation
+        .transfer()
+        .expect("transfer boundary remains live")
+        .publish()
+        .expect("publication boundary remains live")
+        .cleanup()
+        .expect("cleanup boundary remains live")
+        .complete()
+        .expect("completion boundary remains live");
+    let stages: Vec<String> = receipt
+        .events()
+        .map(|event| format!("{:?}", event.stage()))
+        .collect();
+    assert_eq!(contexts.outstanding_obligations(), 0);
+    assert_eq!(receipt.resolution(), ObligationResolution::Discharged);
+    assert_eq!(
+        receipt.events().last().map(|event| event.stage()),
+        Some(ObligationStage::Resolution)
+    );
+    t.emit(&format!(
+        "narrowed cx obligation: role={:?} kind={:?} units={} resolution={:?} stages={}",
+        receipt.role(),
+        receipt.kind(),
+        receipt.units(),
+        receipt.resolution(),
+        stages.join(","),
+    ));
+    t.emit(&format!(
+        "merge capabilities: spawn={} time={} random={} io={} remote={}",
+        contexts.merge_eval().capabilities().spawn,
+        contexts.merge_eval().capabilities().time,
+        contexts.merge_eval().capabilities().random,
+        contexts.merge_eval().capabilities().io,
+        contexts.merge_eval().capabilities().remote,
     ));
 
     let digest = t.digest.0;

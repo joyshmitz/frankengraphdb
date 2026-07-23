@@ -18,23 +18,22 @@ cd "$ROOT"
 EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fgdb-foundation-e2e.XXXXXX")"
 FIRST="$EVIDENCE_DIR/first.txt"
 SECOND="$EVIDENCE_DIR/second.txt"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$EVIDENCE_DIR/target}"
 
-echo "==> verify the foundation crates stay inside the closed universe (path deps only)"
+echo "==> verify direct dependencies stay inside the fgdb/asupersync universe"
 for crate in fgdb-bigint fgdb-types fgdb-claim fgdb-delta-types fgdb-evidence fgdb-resource; do
-  if cargo tree -p "$crate" --edges normal --prefix none | grep -vE '^fgdb-' | grep -q .; then
-    echo "ERROR: $crate has a non-fgdb normal dependency" >&2
+  if cargo tree --locked -p "$crate" --edges normal,dev,build --depth 1 --prefix none | grep -vE '^(fgdb-|asupersync )' | grep -q .; then
+    echo "ERROR: $crate has a direct dependency outside fgdb/asupersync" >&2
     exit 1
   fi
 done
 
 echo "==> run every foundation test target"
-cargo test -p fgdb-bigint -p fgdb-types -p fgdb-claim -p fgdb-delta-types -p fgdb-evidence -p fgdb-resource --all-targets
-cargo test -p fgdb-claim --doc
+cargo test --locked -p fgdb-bigint -p fgdb-types -p fgdb-claim -p fgdb-delta-types -p fgdb-evidence -p fgdb-resource --all-targets
+cargo test --locked -p fgdb-bigint -p fgdb-types -p fgdb-claim -p fgdb-delta-types -p fgdb-evidence -p fgdb-resource --doc
 
 echo "==> reproduce the foundation transcript twice"
-cargo run --quiet -p fgdb-delta-types --example foundation_transcript >"$FIRST"
-cargo run --quiet -p fgdb-delta-types --example foundation_transcript >"$SECOND"
+cargo run --locked --quiet -p fgdb-delta-types --example foundation_transcript -- 1 >"$FIRST"
+cargo run --locked --quiet -p fgdb-delta-types --example foundation_transcript -- 2 >"$SECOND"
 cmp "$FIRST" "$SECOND"
 
 echo "==> assert the scripted typed rejections are present"
@@ -51,7 +50,14 @@ grep -q "timestamp reject tzdb offset mismatch" "$FIRST"
 grep -q "decimal half-even boundary: source=25e-19 coefficient=2" "$FIRST"
 grep -q "decimal reject profile overflow" "$FIRST"
 grep -q "zweight demoted back: Some(170141183460469231731687303715884105727)" "$FIRST"
+grep -q "replay grades: replayable=true; structural reproduced=2 omitted=1; verifiable missing=2; audit missing_or_redacted=2" "$FIRST"
+grep -q "narrowed cx obligation: role=Commit kind=ReservePreparedBytes units=4096 resolution=Discharged stages=Acquisition,Transfer,Publication,Cleanup,Resolution" "$FIRST"
+grep -q "merge capabilities: spawn=false time=false random=false io=false remote=false" "$FIRST"
 
 echo "==> transcript sha256"
-sha256sum "$FIRST"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$FIRST"
+else
+  shasum -a 256 "$FIRST"
+fi
 echo "foundation-types E2E GREEN; retained deterministic evidence: $EVIDENCE_DIR"
