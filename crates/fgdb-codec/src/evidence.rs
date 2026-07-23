@@ -1,7 +1,7 @@
 //! Deterministic diagnostic evidence for scalar codec runs.
 //!
 //! A [`CodecRunRow`] describes encoded-output mechanics. Its codec and corpus
-//! labels are symbolic diagnostics, not registered durable identifiers. Its
+//! IDs are symbolic diagnostics, not registered durable identifiers. Its
 //! checksum covers the encoded bytes only; it is neither a logical-content
 //! digest nor an object identity and must never be used as either.
 
@@ -9,10 +9,10 @@
 
 use core::fmt;
 
-use crate::kernel::DispatchPath;
+use crate::kernel::{DispatchPath, KernelDispatch};
 
-const NDJSON_CODEC_PREFIX: &str = "{\"codec_label\":\"";
-const NDJSON_CORPUS_SEPARATOR: &str = "\",\"corpus_label\":\"";
+const NDJSON_CODEC_PREFIX: &str = "{\"codec_id\":\"";
+const NDJSON_CORPUS_SEPARATOR: &str = "\",\"corpus_id\":\"";
 const NDJSON_ENTRY_SEPARATOR: &str = "\",\"entry_count\":";
 const NDJSON_ENCODED_SEPARATOR: &str = ",\"encoded_bytes\":";
 const NDJSON_RATIO_SEPARATOR: &str = ",\"bytes_per_entry\":";
@@ -21,9 +21,14 @@ const NDJSON_RATIO_MIDDLE: &str = ",\"denominator\":";
 const NDJSON_RATIO_SUFFIX: &str = "}";
 const NDJSON_NULL: &str = "null";
 const NDJSON_DISPATCH_SEPARATOR: &str = ",\"dispatch_path\":\"";
-const NDJSON_CHECKSUM_PREFIX: &str = "\",\"encoded_output_checksum\":{\"algorithm\":\"";
+const NDJSON_CHECKSUM_PREFIX: &str = "\",\"output_checksum\":{\"algorithm\":\"";
 const NDJSON_CHECKSUM_MIDDLE: &str = "\",\"hex\":\"";
 const NDJSON_SUFFIX: &str = "\"}}\n";
+
+/// Maximum UTF-8 bytes in one symbolic evidence identifier.
+pub const MAX_EVIDENCE_ID_BYTES: usize = 256;
+/// Maximum bytes in one emitted NDJSON row.
+pub const MAX_NDJSON_ROW_BYTES: usize = 4_096;
 
 /// Exact normalized byte count per logical entry.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -100,10 +105,10 @@ impl EncodedOutputChecksum {
 /// Allocation involved in constructing or encoding one evidence row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EvidenceAllocation {
-    /// Owned symbolic codec label.
-    CodecLabel,
-    /// Owned symbolic corpus label.
-    CorpusLabel,
+    /// Owned symbolic codec identifier.
+    CodecId,
+    /// Owned symbolic corpus identifier.
+    CorpusId,
     /// Complete one-line NDJSON output.
     NdjsonLine,
 }
@@ -111,8 +116,24 @@ pub enum EvidenceAllocation {
 /// Checked evidence-row construction or encoding failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EvidenceError {
+    /// A symbolic diagnostic identifier exceeds the fixed scalar bound.
+    IdentifierTooLong {
+        /// Identifier being copied.
+        target: EvidenceAllocation,
+        /// UTF-8 bytes supplied.
+        actual: usize,
+        /// Fixed UTF-8 byte ceiling.
+        limit: usize,
+    },
     /// A complete output length was not representable as `usize`.
     NdjsonLengthOverflow,
+    /// A complete row exceeds the fixed scalar evidence ceiling.
+    NdjsonRowLimitExceeded {
+        /// Exact row bytes required.
+        required: usize,
+        /// Fixed row ceiling.
+        limit: usize,
+    },
     /// Reserving owned diagnostic storage failed.
     AllocationFailed {
         /// Storage being reserved.
@@ -125,9 +146,21 @@ pub enum EvidenceError {
 impl fmt::Display for EvidenceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
+            Self::IdentifierTooLong {
+                target,
+                actual,
+                limit,
+            } => write!(
+                formatter,
+                "codec evidence {target:?} has {actual} UTF-8 bytes, limit is {limit}"
+            ),
             Self::NdjsonLengthOverflow => {
                 formatter.write_str("codec evidence NDJSON length overflows usize")
             }
+            Self::NdjsonRowLimitExceeded { required, limit } => write!(
+                formatter,
+                "codec evidence NDJSON needs {required} bytes, limit is {limit}"
+            ),
             Self::AllocationFailed { target, requested } => write!(
                 formatter,
                 "could not reserve {requested} bytes for codec evidence {target:?}"
@@ -140,30 +173,30 @@ impl std::error::Error for EvidenceError {}
 
 /// One deterministic encoded-output evidence row.
 ///
-/// The labels are intentionally named labels rather than IDs: registration,
+/// The string IDs are explicitly symbolic evidence identifiers: registration,
 /// durable framing, and logical digests belong to other layers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodecRunRow {
-    codec_label: String,
-    corpus_label: String,
+    codec_id: String,
+    corpus_id: String,
     entry_count: usize,
     encoded_bytes: usize,
     bytes_per_entry: BytesPerEntry,
     dispatch_path: DispatchPath,
-    encoded_output_checksum: EncodedOutputChecksum,
+    output_checksum: EncodedOutputChecksum,
 }
 
 impl CodecRunRow {
-    /// Constructs a row from symbolic labels and the exact encoded output.
+    /// Constructs a row from symbolic IDs and the exact encoded output.
     pub fn try_new(
-        codec_label: &str,
-        corpus_label: &str,
+        codec_id: &str,
+        corpus_id: &str,
         entry_count: usize,
         encoded_output: &[u8],
         dispatch_path: DispatchPath,
     ) -> Result<Self, EvidenceError> {
-        let codec_label = try_copy_label(codec_label, EvidenceAllocation::CodecLabel)?;
-        let corpus_label = try_copy_label(corpus_label, EvidenceAllocation::CorpusLabel)?;
+        let codec_id = try_copy_id(codec_id, EvidenceAllocation::CodecId)?;
+        let corpus_id = try_copy_id(corpus_id, EvidenceAllocation::CorpusId)?;
         let encoded_bytes = encoded_output.len();
         let bytes_per_entry = if entry_count == 0 {
             BytesPerEntry::UndefinedForEmpty
@@ -172,26 +205,47 @@ impl CodecRunRow {
         };
 
         Ok(Self {
-            codec_label,
-            corpus_label,
+            codec_id,
+            corpus_id,
             entry_count,
             encoded_bytes,
             bytes_per_entry,
             dispatch_path,
-            encoded_output_checksum: EncodedOutputChecksum::from_bytes(encoded_output),
+            output_checksum: EncodedOutputChecksum::from_bytes(encoded_output),
         })
     }
 
-    /// Returns the symbolic, explicitly non-durable codec label.
-    #[must_use]
-    pub fn codec_label(&self) -> &str {
-        &self.codec_label
+    /// Constructs a row whose dispatch path is bound to the selected kernel.
+    ///
+    /// The caller still supplies symbolic, non-durable IDs and the exact byte
+    /// output being measured. Unlike [`Self::try_new`], this constructor cannot
+    /// accidentally label a future SIMD kernel as scalar (or vice versa).
+    pub fn try_from_kernel_output<K: KernelDispatch + ?Sized>(
+        kernel: &K,
+        codec_id: &str,
+        corpus_id: &str,
+        entry_count: usize,
+        encoded_output: &[u8],
+    ) -> Result<Self, EvidenceError> {
+        Self::try_new(
+            codec_id,
+            corpus_id,
+            entry_count,
+            encoded_output,
+            kernel.dispatch_path(),
+        )
     }
 
-    /// Returns the symbolic corpus label.
+    /// Returns the symbolic, explicitly non-durable codec ID.
     #[must_use]
-    pub fn corpus_label(&self) -> &str {
-        &self.corpus_label
+    pub fn codec_id(&self) -> &str {
+        &self.codec_id
+    }
+
+    /// Returns the symbolic corpus ID.
+    #[must_use]
+    pub fn corpus_id(&self) -> &str {
+        &self.corpus_id
     }
 
     /// Returns the logical entry count supplied by the caller.
@@ -220,8 +274,8 @@ impl CodecRunRow {
 
     /// Returns the encoded-output evidence checksum.
     #[must_use]
-    pub const fn encoded_output_checksum(&self) -> EncodedOutputChecksum {
-        self.encoded_output_checksum
+    pub const fn output_checksum(&self) -> EncodedOutputChecksum {
+        self.output_checksum
     }
 
     /// Encodes one deterministic NDJSON line with a fixed key order.
@@ -231,6 +285,12 @@ impl CodecRunRow {
     /// in exactly one newline.
     pub fn to_ndjson(&self) -> Result<String, EvidenceError> {
         let capacity = self.ndjson_len()?;
+        if capacity > MAX_NDJSON_ROW_BYTES {
+            return Err(EvidenceError::NdjsonRowLimitExceeded {
+                required: capacity,
+                limit: MAX_NDJSON_ROW_BYTES,
+            });
+        }
         let mut output = String::new();
         output
             .try_reserve_exact(capacity)
@@ -240,9 +300,9 @@ impl CodecRunRow {
             })?;
 
         output.push_str(NDJSON_CODEC_PREFIX);
-        push_json_string_content(&mut output, &self.codec_label);
+        push_json_string_content(&mut output, &self.codec_id);
         output.push_str(NDJSON_CORPUS_SEPARATOR);
-        push_json_string_content(&mut output, &self.corpus_label);
+        push_json_string_content(&mut output, &self.corpus_id);
         output.push_str(NDJSON_ENTRY_SEPARATOR);
         push_usize_decimal(&mut output, self.entry_count);
         output.push_str(NDJSON_ENCODED_SEPARATOR);
@@ -263,7 +323,7 @@ impl CodecRunRow {
         output.push_str(NDJSON_CHECKSUM_PREFIX);
         output.push_str(EncodedOutputChecksum::ALGORITHM);
         output.push_str(NDJSON_CHECKSUM_MIDDLE);
-        push_u64_hex(&mut output, self.encoded_output_checksum.value());
+        push_u64_hex(&mut output, self.output_checksum.value());
         output.push_str(NDJSON_SUFFIX);
 
         debug_assert_eq!(output.len(), capacity);
@@ -273,9 +333,9 @@ impl CodecRunRow {
     fn ndjson_len(&self) -> Result<usize, EvidenceError> {
         let mut length = 0_usize;
         add_len(&mut length, NDJSON_CODEC_PREFIX.len())?;
-        add_len(&mut length, escaped_json_len(&self.codec_label)?)?;
+        add_len(&mut length, escaped_json_len(&self.codec_id)?)?;
         add_len(&mut length, NDJSON_CORPUS_SEPARATOR.len())?;
-        add_len(&mut length, escaped_json_len(&self.corpus_label)?)?;
+        add_len(&mut length, escaped_json_len(&self.corpus_id)?)?;
         add_len(&mut length, NDJSON_ENTRY_SEPARATOR.len())?;
         add_len(&mut length, usize_decimal_len(self.entry_count))?;
         add_len(&mut length, NDJSON_ENCODED_SEPARATOR.len())?;
@@ -302,7 +362,14 @@ impl CodecRunRow {
     }
 }
 
-fn try_copy_label(source: &str, target: EvidenceAllocation) -> Result<String, EvidenceError> {
+fn try_copy_id(source: &str, target: EvidenceAllocation) -> Result<String, EvidenceError> {
+    if source.len() > MAX_EVIDENCE_ID_BYTES {
+        return Err(EvidenceError::IdentifierTooLong {
+            target,
+            actual: source.len(),
+            limit: MAX_EVIDENCE_ID_BYTES,
+        });
+    }
     let mut owned = String::new();
     owned
         .try_reserve_exact(source.len())
@@ -449,7 +516,7 @@ mod tests {
 
         assert_eq!(
             row.to_ndjson().expect("small output fits"),
-            "{\"codec_label\":\"bit\\\"pack\\\\λ\\n\",\"corpus_label\":\"snow雪\\u0000\\t\",\"entry_count\":2,\"encoded_bytes\":3,\"bytes_per_entry\":{\"numerator\":3,\"denominator\":2},\"dispatch_path\":\"scalar\",\"encoded_output_checksum\":{\"algorithm\":\"fnv1a64-output-evidence-v1\",\"hex\":\"d949aa186c0c4928\"}}\n"
+            "{\"codec_id\":\"bit\\\"pack\\\\λ\\n\",\"corpus_id\":\"snow雪\\u0000\\t\",\"entry_count\":2,\"encoded_bytes\":3,\"bytes_per_entry\":{\"numerator\":3,\"denominator\":2},\"dispatch_path\":\"scalar\",\"output_checksum\":{\"algorithm\":\"fnv1a64-output-evidence-v1\",\"hex\":\"d949aa186c0c4928\"}}\n"
         );
     }
 
@@ -459,7 +526,7 @@ mod tests {
             .expect("small labels fit");
         assert_eq!(
             row.to_ndjson().expect("small output fits"),
-            "{\"codec_label\":\"block\",\"corpus_label\":\"empty\",\"entry_count\":0,\"encoded_bytes\":0,\"bytes_per_entry\":null,\"dispatch_path\":\"scalar\",\"encoded_output_checksum\":{\"algorithm\":\"fnv1a64-output-evidence-v1\",\"hex\":\"cbf29ce484222325\"}}\n"
+            "{\"codec_id\":\"block\",\"corpus_id\":\"empty\",\"entry_count\":0,\"encoded_bytes\":0,\"bytes_per_entry\":null,\"dispatch_path\":\"scalar\",\"output_checksum\":{\"algorithm\":\"fnv1a64-output-evidence-v1\",\"hex\":\"cbf29ce484222325\"}}\n"
         );
     }
 
@@ -479,10 +546,7 @@ mod tests {
             first.to_ndjson().expect("small output fits"),
             same.to_ndjson().expect("small output fits")
         );
-        assert_ne!(
-            first.encoded_output_checksum(),
-            changed.encoded_output_checksum()
-        );
+        assert_ne!(first.output_checksum(), changed.output_checksum());
     }
 
     #[test]
@@ -490,18 +554,41 @@ mod tests {
         let kernels = ScalarKernels;
         let encoded = BitpackKernel::encode(&kernels, &[1_u64, 2, 3], 2)
             .expect("valid scalar bitpack fixture");
-        let row = CodecRunRow::try_new(
+        let row = CodecRunRow::try_from_kernel_output(
+            &kernels,
             "bitpack-symbolic",
             "trait-fixture",
             3,
             &encoded,
-            <ScalarKernels as BitpackKernel>::DISPATCH_PATH,
         )
         .expect("small labels fit");
 
-        assert_eq!(row.codec_label(), "bitpack-symbolic");
-        assert_eq!(row.corpus_label(), "trait-fixture");
+        assert_eq!(row.codec_id(), "bitpack-symbolic");
+        assert_eq!(row.corpus_id(), "trait-fixture");
         assert_eq!(row.dispatch_path(), DispatchPath::Scalar);
         assert_eq!(row.encoded_bytes(), encoded.len());
+    }
+
+    #[test]
+    fn identifier_bounds_fail_before_copying_or_row_encoding() {
+        let oversized = "x".repeat(MAX_EVIDENCE_ID_BYTES + 1);
+        assert_eq!(
+            CodecRunRow::try_new(&oversized, "corpus", 1, &[0], DispatchPath::Scalar),
+            Err(EvidenceError::IdentifierTooLong {
+                target: EvidenceAllocation::CodecId,
+                actual: MAX_EVIDENCE_ID_BYTES + 1,
+                limit: MAX_EVIDENCE_ID_BYTES,
+            })
+        );
+
+        let controls = "\u{0001}".repeat(MAX_EVIDENCE_ID_BYTES);
+        let row = CodecRunRow::try_new(&controls, &controls, usize::MAX, &[], DispatchPath::Scalar)
+            .expect("bounded identifiers fit owned storage");
+        assert!(
+            row.to_ndjson()
+                .expect("maximum escaped identifiers fit the row ceiling")
+                .len()
+                <= MAX_NDJSON_ROW_BYTES
+        );
     }
 }

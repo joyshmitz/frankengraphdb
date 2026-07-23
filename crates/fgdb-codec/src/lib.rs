@@ -1,10 +1,12 @@
 //! Safe scalar codec kernels for FrankenGraphDB.
 //!
-//! This initial registry-independent slice implements canonical unsigned
-//! LEB128, checked bitpacking/frame-of-reference coding, and Elias-Fano
-//! monotone sequences. Durable codec identifiers and envelopes remain owned by
-//! the generated format layer; this crate defines only their reusable scalar
-//! mechanics.
+//! The registry-independent layer contains canonical unsigned LEB128 and
+//! delta-varint, checked bitpacking/frame-of-reference and Elias-Fano kernels,
+//! deterministic block compression, roaring-style sets, the honest closed
+//! neighbor-codec family, type-safe identity-column mechanics, scalar dispatch
+//! traits, and structured diagnostic evidence. Durable codec identifiers,
+//! envelopes, logical-digest recipes, and SIMD implementations remain owned by
+//! their still-gated format and unsafe-boundary work.
 
 #![forbid(unsafe_code)]
 

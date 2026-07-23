@@ -10,7 +10,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::{bitpack, block};
+use crate::{bitpack, block, delta_varint, elias_fano, identity, neighbor, roaring, varint};
 
 /// Implementation path used by one codec operation.
 ///
@@ -34,11 +34,45 @@ impl DispatchPath {
     }
 }
 
-/// Checked fixed-width and frame-of-reference bitpacking operations.
-pub trait BitpackKernel {
-    /// Implementation path used by this kernel.
+/// Common implementation-path identity shared by every codec kernel seam.
+///
+/// A single associated constant prevents one implementation from labeling
+/// different codec families with contradictory dispatch paths. Diagnostic
+/// evidence can bind to this trait instead of accepting a caller-supplied
+/// path label.
+pub trait KernelDispatch {
+    /// Implementation path selected by this kernel set.
     const DISPATCH_PATH: DispatchPath;
 
+    /// Returns the selected implementation path.
+    #[must_use]
+    fn dispatch_path(&self) -> DispatchPath {
+        Self::DISPATCH_PATH
+    }
+}
+
+/// Canonical unsigned LEB128 operations for individual `u64` values.
+pub trait VarintKernel: KernelDispatch {
+    /// Encodes one value into the allocation-free canonical representation.
+    fn encode_varint(&self, value: u64) -> varint::EncodedU64;
+
+    /// Writes one canonical value into caller-owned storage.
+    fn write_varint(
+        &self,
+        value: u64,
+        output: &mut [u8],
+    ) -> Result<usize, varint::VarintEncodeError>;
+
+    /// Decodes one exact canonical value and rejects trailing bytes.
+    fn decode_varint(&self, input: &[u8]) -> Result<u64, varint::VarintDecodeError>;
+
+    /// Decodes one canonical prefix and returns its consumed byte count.
+    fn decode_varint_prefix(&self, input: &[u8])
+    -> Result<(u64, usize), varint::VarintDecodeError>;
+}
+
+/// Checked fixed-width and frame-of-reference bitpacking operations.
+pub trait BitpackKernel: KernelDispatch {
     /// Encodes fixed-width values into canonical bytes.
     fn encode(&self, values: &[u64], width: u8) -> Result<Vec<u8>, bitpack::BitpackError>;
 
@@ -76,11 +110,150 @@ pub trait BitpackKernel {
     ) -> Result<Vec<u64>, bitpack::BitpackError>;
 }
 
-/// Checked deterministic block compression and decompression operations.
-pub trait BlockKernel {
-    /// Implementation path used by this kernel.
-    const DISPATCH_PATH: DispatchPath;
+/// Canonical delta-varint operations for nondecreasing `u64` sequences.
+pub trait DeltaVarintKernel: KernelDispatch {
+    /// Encodes values using the canonical absolute-first delta-varint form.
+    fn encode_delta_varint(
+        &self,
+        values: &[u64],
+    ) -> Result<Vec<u8>, delta_varint::DeltaVarintEncodeError>;
 
+    /// Decodes exactly `count` values under an explicit materialization bound.
+    fn decode_delta_varint(
+        &self,
+        input: &[u8],
+        count: usize,
+        limit: delta_varint::EntryLimit,
+    ) -> Result<Vec<u64>, delta_varint::DeltaVarintDecodeError>;
+}
+
+/// Checked construction and access for the scalar Elias-Fano representation.
+pub trait EliasFanoKernel: KernelDispatch {
+    /// Constructs the canonical scalar Elias-Fano representation.
+    fn build_elias_fano(
+        &self,
+        values: &[u64],
+        limit: elias_fano::EntryLimit,
+    ) -> Result<elias_fano::EliasFano, elias_fano::EliasFanoError>;
+
+    /// Returns the value at `index`, if present.
+    fn elias_fano_select(&self, values: &elias_fano::EliasFano, index: usize) -> Option<u64>;
+
+    /// Counts represented values less than or equal to `value`.
+    fn elias_fano_rank_le(&self, values: &elias_fano::EliasFano, value: u64) -> usize;
+
+    /// Counts represented values strictly less than `value`.
+    fn elias_fano_rank_lt(&self, values: &elias_fano::EliasFano, value: u64) -> usize;
+
+    /// Returns the last represented value not greater than `value`.
+    fn elias_fano_predecessor(&self, values: &elias_fano::EliasFano, value: u64) -> Option<u64>;
+
+    /// Returns the first represented value not less than `value`.
+    fn elias_fano_successor(&self, values: &elias_fano::EliasFano, value: u64) -> Option<u64>;
+}
+
+/// Checked construction and set operations for scalar roaring-like bitmaps.
+pub trait RoaringKernel: KernelDispatch {
+    /// Constructs a canonical bitmap from strictly increasing values.
+    fn build_roaring(
+        &self,
+        values: &[u32],
+        limit: roaring::EntryLimit,
+    ) -> Result<roaring::RoaringBitmap, roaring::RoaringError>;
+
+    /// Returns whether `value` belongs to the set.
+    fn roaring_contains(&self, values: &roaring::RoaringBitmap, value: u32) -> bool;
+
+    /// Counts represented values less than or equal to `value`.
+    fn roaring_rank_le(&self, values: &roaring::RoaringBitmap, value: u32) -> usize;
+
+    /// Returns the value at `index`, if present.
+    fn roaring_select(&self, values: &roaring::RoaringBitmap, index: usize) -> Option<u32>;
+
+    /// Computes a canonical set intersection under an explicit result bound.
+    fn roaring_intersection(
+        &self,
+        left: &roaring::RoaringBitmap,
+        right: &roaring::RoaringBitmap,
+        limit: roaring::EntryLimit,
+    ) -> Result<roaring::RoaringBitmap, roaring::RoaringError>;
+}
+
+/// Explicit scalar neighbor representation construction and access.
+///
+/// The caller supplies the [`neighbor::NeighborCodec`] arm. This trait performs
+/// no adaptive selection and the arm remains an in-memory capability tag, not
+/// a durable codec identifier.
+pub trait NeighborKernel: KernelDispatch {
+    /// Constructs exactly the requested scalar representation arm.
+    fn build_neighbors(
+        &self,
+        codec: neighbor::NeighborCodec,
+        values: &[u64],
+        limit: neighbor::EntryLimit,
+    ) -> Result<neighbor::EncodedNeighbors, neighbor::NeighborError>;
+
+    /// Returns whether `value` belongs to the neighbor list.
+    fn neighbors_contains(&self, values: &neighbor::EncodedNeighbors, value: u64) -> bool;
+
+    /// Counts represented neighbors less than or equal to `value`.
+    fn neighbors_rank_le(&self, values: &neighbor::EncodedNeighbors, value: u64) -> usize;
+
+    /// Returns the neighbor at `index`, if present.
+    fn neighbors_select(&self, values: &neighbor::EncodedNeighbors, index: usize) -> Option<u64>;
+
+    /// Materializes a sorted intersection under an explicit result bound.
+    fn neighbors_intersection(
+        &self,
+        left: &neighbor::EncodedNeighbors,
+        right: &neighbor::EncodedNeighbors,
+        limit: neighbor::EntryLimit,
+    ) -> Result<Vec<u64>, neighbor::NeighborError>;
+}
+
+/// Checked construction and typed access for scalar identity columns.
+///
+/// This seam exposes the registry-independent in-memory representation only.
+/// It does not encode durable identity bytes, framing, or codec identifiers.
+pub trait IdentityColumnKernel: KernelDispatch {
+    /// Constructs an identity column while preserving arbitrary row order.
+    fn build_identity_column<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::IdentityColumn<T>, identity::IdentityColumnError>;
+
+    /// Constructs an identity column after validating monotone row order.
+    fn build_sorted_identity_column<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError>;
+
+    /// Reconstructs one typed identity from an arbitrary-order column.
+    fn identity_at<T: identity::ElementIdentity>(
+        &self,
+        column: &identity::IdentityColumn<T>,
+        row: usize,
+    ) -> Option<T>;
+
+    /// Reconstructs one typed identity from a sorted column.
+    fn sorted_identity_at<T: identity::ElementIdentity>(
+        &self,
+        column: &identity::SortedIdentityColumn<T>,
+        row: usize,
+    ) -> Option<T>;
+
+    /// Returns the first row whose typed identity is not less than `probe`.
+    fn identity_lower_bound<T: identity::ElementIdentity>(
+        &self,
+        column: &identity::SortedIdentityColumn<T>,
+        probe: T,
+    ) -> usize;
+}
+
+/// Checked deterministic block compression and decompression operations.
+pub trait BlockKernel: KernelDispatch {
     /// Compresses one caller-framed block under an immutable scalar profile.
     fn compress(
         &self,
@@ -105,13 +278,40 @@ impl ScalarKernels {
     /// Returns the only implementation path currently available.
     #[must_use]
     pub const fn dispatch_path(self) -> DispatchPath {
-        DispatchPath::Scalar
+        <Self as KernelDispatch>::DISPATCH_PATH
+    }
+}
+
+impl KernelDispatch for ScalarKernels {
+    const DISPATCH_PATH: DispatchPath = DispatchPath::Scalar;
+}
+
+impl VarintKernel for ScalarKernels {
+    fn encode_varint(&self, value: u64) -> varint::EncodedU64 {
+        varint::encode_u64(value)
+    }
+
+    fn write_varint(
+        &self,
+        value: u64,
+        output: &mut [u8],
+    ) -> Result<usize, varint::VarintEncodeError> {
+        varint::write_u64(value, output)
+    }
+
+    fn decode_varint(&self, input: &[u8]) -> Result<u64, varint::VarintDecodeError> {
+        varint::decode_u64(input)
+    }
+
+    fn decode_varint_prefix(
+        &self,
+        input: &[u8],
+    ) -> Result<(u64, usize), varint::VarintDecodeError> {
+        varint::decode_u64_prefix(input)
     }
 }
 
 impl BitpackKernel for ScalarKernels {
-    const DISPATCH_PATH: DispatchPath = DispatchPath::Scalar;
-
     fn encode(&self, values: &[u64], width: u8) -> Result<Vec<u8>, bitpack::BitpackError> {
         bitpack::encode(values, width)
     }
@@ -154,9 +354,170 @@ impl BitpackKernel for ScalarKernels {
     }
 }
 
-impl BlockKernel for ScalarKernels {
-    const DISPATCH_PATH: DispatchPath = DispatchPath::Scalar;
+impl DeltaVarintKernel for ScalarKernels {
+    fn encode_delta_varint(
+        &self,
+        values: &[u64],
+    ) -> Result<Vec<u8>, delta_varint::DeltaVarintEncodeError> {
+        delta_varint::encode(values)
+    }
 
+    fn decode_delta_varint(
+        &self,
+        input: &[u8],
+        count: usize,
+        limit: delta_varint::EntryLimit,
+    ) -> Result<Vec<u64>, delta_varint::DeltaVarintDecodeError> {
+        delta_varint::decode(input, count, limit)
+    }
+}
+
+impl EliasFanoKernel for ScalarKernels {
+    fn build_elias_fano(
+        &self,
+        values: &[u64],
+        limit: elias_fano::EntryLimit,
+    ) -> Result<elias_fano::EliasFano, elias_fano::EliasFanoError> {
+        elias_fano::EliasFano::try_new(values, limit)
+    }
+
+    fn elias_fano_select(&self, values: &elias_fano::EliasFano, index: usize) -> Option<u64> {
+        values.select(index)
+    }
+
+    fn elias_fano_rank_le(&self, values: &elias_fano::EliasFano, value: u64) -> usize {
+        values.rank_le(value)
+    }
+
+    fn elias_fano_rank_lt(&self, values: &elias_fano::EliasFano, value: u64) -> usize {
+        values.rank_lt(value)
+    }
+
+    fn elias_fano_predecessor(&self, values: &elias_fano::EliasFano, value: u64) -> Option<u64> {
+        values.predecessor(value)
+    }
+
+    fn elias_fano_successor(&self, values: &elias_fano::EliasFano, value: u64) -> Option<u64> {
+        values.successor(value)
+    }
+}
+
+impl RoaringKernel for ScalarKernels {
+    fn build_roaring(
+        &self,
+        values: &[u32],
+        limit: roaring::EntryLimit,
+    ) -> Result<roaring::RoaringBitmap, roaring::RoaringError> {
+        roaring::RoaringBitmap::try_from_sorted(values, limit)
+    }
+
+    fn roaring_contains(&self, values: &roaring::RoaringBitmap, value: u32) -> bool {
+        values.contains(value)
+    }
+
+    fn roaring_rank_le(&self, values: &roaring::RoaringBitmap, value: u32) -> usize {
+        values.rank_le(value)
+    }
+
+    fn roaring_select(&self, values: &roaring::RoaringBitmap, index: usize) -> Option<u32> {
+        values.select(index)
+    }
+
+    fn roaring_intersection(
+        &self,
+        left: &roaring::RoaringBitmap,
+        right: &roaring::RoaringBitmap,
+        limit: roaring::EntryLimit,
+    ) -> Result<roaring::RoaringBitmap, roaring::RoaringError> {
+        left.intersection(right, limit)
+    }
+}
+
+impl NeighborKernel for ScalarKernels {
+    fn build_neighbors(
+        &self,
+        codec: neighbor::NeighborCodec,
+        values: &[u64],
+        limit: neighbor::EntryLimit,
+    ) -> Result<neighbor::EncodedNeighbors, neighbor::NeighborError> {
+        match codec {
+            neighbor::NeighborCodec::EliasFano => {
+                neighbor::EncodedNeighbors::try_elias_fano(values, limit)
+            }
+            neighbor::NeighborCodec::StreamVByte => {
+                neighbor::EncodedNeighbors::try_stream_vbyte(values, limit)
+            }
+            neighbor::NeighborCodec::DenseIntervals => {
+                neighbor::EncodedNeighbors::try_dense_intervals(values, limit)
+            }
+        }
+    }
+
+    fn neighbors_contains(&self, values: &neighbor::EncodedNeighbors, value: u64) -> bool {
+        values.contains(value)
+    }
+
+    fn neighbors_rank_le(&self, values: &neighbor::EncodedNeighbors, value: u64) -> usize {
+        values.rank_le(value)
+    }
+
+    fn neighbors_select(&self, values: &neighbor::EncodedNeighbors, index: usize) -> Option<u64> {
+        values.select(index)
+    }
+
+    fn neighbors_intersection(
+        &self,
+        left: &neighbor::EncodedNeighbors,
+        right: &neighbor::EncodedNeighbors,
+        limit: neighbor::EntryLimit,
+    ) -> Result<Vec<u64>, neighbor::NeighborError> {
+        left.intersection(right, limit)
+    }
+}
+
+impl IdentityColumnKernel for ScalarKernels {
+    fn build_identity_column<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::IdentityColumn<T>, identity::IdentityColumnError> {
+        identity::IdentityColumn::try_new(values, limits)
+    }
+
+    fn build_sorted_identity_column<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError> {
+        identity::SortedIdentityColumn::try_new(values, limits)
+    }
+
+    fn identity_at<T: identity::ElementIdentity>(
+        &self,
+        column: &identity::IdentityColumn<T>,
+        row: usize,
+    ) -> Option<T> {
+        column.get(row)
+    }
+
+    fn sorted_identity_at<T: identity::ElementIdentity>(
+        &self,
+        column: &identity::SortedIdentityColumn<T>,
+        row: usize,
+    ) -> Option<T> {
+        column.get(row)
+    }
+
+    fn identity_lower_bound<T: identity::ElementIdentity>(
+        &self,
+        column: &identity::SortedIdentityColumn<T>,
+        probe: T,
+    ) -> usize {
+        column.lower_bound(probe)
+    }
+}
+
+impl BlockKernel for ScalarKernels {
     fn compress(
         &self,
         input: &[u8],
@@ -178,22 +539,67 @@ impl BlockKernel for ScalarKernels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fgdb_types::{EId, VId};
 
     const KERNELS: ScalarKernels = ScalarKernels;
 
     #[test]
     fn selector_is_zero_sized_and_reports_only_scalar() {
+        fn assert_all_scalar_seams<T>()
+        where
+            T: VarintKernel
+                + BitpackKernel
+                + DeltaVarintKernel
+                + EliasFanoKernel
+                + RoaringKernel
+                + NeighborKernel
+                + IdentityColumnKernel
+                + BlockKernel,
+        {
+        }
+
+        assert_all_scalar_seams::<ScalarKernels>();
         assert_eq!(core::mem::size_of::<ScalarKernels>(), 0);
         assert_eq!(KERNELS.dispatch_path(), DispatchPath::Scalar);
         assert_eq!(
-            <ScalarKernels as BitpackKernel>::DISPATCH_PATH,
-            DispatchPath::Scalar
-        );
-        assert_eq!(
-            <ScalarKernels as BlockKernel>::DISPATCH_PATH,
+            <ScalarKernels as KernelDispatch>::DISPATCH_PATH,
             DispatchPath::Scalar
         );
         assert_eq!(DispatchPath::Scalar.evidence_label(), "scalar");
+    }
+
+    #[test]
+    fn varint_trait_matches_direct_bytes_writes_decode_and_errors() {
+        for value in [0_u64, 127, 128, 16_384, u64::MAX] {
+            let direct = varint::encode_u64(value);
+            let dispatched = VarintKernel::encode_varint(&KERNELS, value);
+            assert_eq!(dispatched, direct);
+            assert_eq!(
+                VarintKernel::decode_varint(&KERNELS, dispatched.as_bytes()),
+                varint::decode_u64(direct.as_bytes())
+            );
+
+            let mut direct_output = [0xa5_u8; varint::MAX_U64_VARINT_BYTES + 1];
+            let mut dispatched_output = direct_output;
+            assert_eq!(
+                VarintKernel::write_varint(&KERNELS, value, &mut dispatched_output),
+                varint::write_u64(value, &mut direct_output)
+            );
+            assert_eq!(dispatched_output, direct_output);
+        }
+
+        assert_eq!(
+            VarintKernel::decode_varint_prefix(&KERNELS, &[0xac, 0x02, 0xff]),
+            varint::decode_u64_prefix(&[0xac, 0x02, 0xff])
+        );
+        assert_eq!(
+            VarintKernel::decode_varint(&KERNELS, &[0x80, 0x00]),
+            varint::decode_u64(&[0x80, 0x00])
+        );
+        assert_eq!(
+            VarintKernel::write_varint(&KERNELS, u64::MAX, &mut [0_u8; 9]),
+            varint::write_u64(u64::MAX, &mut [0_u8; 9])
+        );
     }
 
     #[test]
@@ -245,6 +651,270 @@ mod tests {
         assert_eq!(
             BitpackKernel::encode_for(&KERNELS, &invalid_values, 1_000, 4),
             bitpack::encode_for(&invalid_values, 1_000, 4)
+        );
+    }
+
+    #[test]
+    fn delta_varint_trait_matches_direct_bytes_decode_and_errors() {
+        let values = [7_u64, 7, 130, 65_536];
+        let direct = delta_varint::encode(&values);
+        assert_eq!(
+            DeltaVarintKernel::encode_delta_varint(&KERNELS, &values),
+            direct
+        );
+
+        let encoded = direct.expect("valid delta-varint fixture");
+        let limit = delta_varint::EntryLimit::new(values.len());
+        assert_eq!(
+            DeltaVarintKernel::decode_delta_varint(&KERNELS, &encoded, values.len(), limit),
+            delta_varint::decode(&encoded, values.len(), limit)
+        );
+
+        let decreasing = [4_u64, 3];
+        assert_eq!(
+            DeltaVarintKernel::encode_delta_varint(&KERNELS, &decreasing),
+            delta_varint::encode(&decreasing)
+        );
+        let small_limit = delta_varint::EntryLimit::new(values.len() - 1);
+        assert_eq!(
+            DeltaVarintKernel::decode_delta_varint(&KERNELS, &encoded, values.len(), small_limit),
+            delta_varint::decode(&encoded, values.len(), small_limit)
+        );
+    }
+
+    #[test]
+    fn elias_fano_trait_matches_direct_construction_access_and_errors() {
+        let values = [0_u64, 0, 3, 9, 65_536];
+        let limit = elias_fano::EntryLimit::new(values.len());
+        let direct = elias_fano::EliasFano::try_new(&values, limit);
+        assert_eq!(
+            EliasFanoKernel::build_elias_fano(&KERNELS, &values, limit),
+            direct
+        );
+
+        let encoded = direct.expect("valid Elias-Fano fixture");
+        for index in 0..=values.len() {
+            assert_eq!(
+                EliasFanoKernel::elias_fano_select(&KERNELS, &encoded, index),
+                encoded.select(index)
+            );
+        }
+        for probe in [0_u64, 1, 9, 10, u64::MAX] {
+            assert_eq!(
+                EliasFanoKernel::elias_fano_rank_le(&KERNELS, &encoded, probe),
+                encoded.rank_le(probe)
+            );
+            assert_eq!(
+                EliasFanoKernel::elias_fano_rank_lt(&KERNELS, &encoded, probe),
+                encoded.rank_lt(probe)
+            );
+            assert_eq!(
+                EliasFanoKernel::elias_fano_predecessor(&KERNELS, &encoded, probe),
+                encoded.predecessor(probe)
+            );
+            assert_eq!(
+                EliasFanoKernel::elias_fano_successor(&KERNELS, &encoded, probe),
+                encoded.successor(probe)
+            );
+        }
+
+        let decreasing = [4_u64, 3];
+        assert_eq!(
+            EliasFanoKernel::build_elias_fano(&KERNELS, &decreasing, limit),
+            elias_fano::EliasFano::try_new(&decreasing, limit)
+        );
+    }
+
+    #[test]
+    fn roaring_trait_matches_direct_set_operations_and_errors() {
+        let left_values = [1_u32, 2, 3, 65_537, 65_538];
+        let right_values = [2_u32, 3, 5, 65_538];
+        let left_limit = roaring::EntryLimit::new(left_values.len());
+        let right_limit = roaring::EntryLimit::new(right_values.len());
+        let direct_left = roaring::RoaringBitmap::try_from_sorted(&left_values, left_limit);
+        assert_eq!(
+            RoaringKernel::build_roaring(&KERNELS, &left_values, left_limit),
+            direct_left
+        );
+
+        let left = direct_left.expect("valid roaring fixture");
+        let right = roaring::RoaringBitmap::try_from_sorted(&right_values, right_limit)
+            .expect("valid roaring fixture");
+        for probe in [0_u32, 2, 4, 65_538, u32::MAX] {
+            assert_eq!(
+                RoaringKernel::roaring_contains(&KERNELS, &left, probe),
+                left.contains(probe)
+            );
+            assert_eq!(
+                RoaringKernel::roaring_rank_le(&KERNELS, &left, probe),
+                left.rank_le(probe)
+            );
+        }
+        for index in 0..=left.len() {
+            assert_eq!(
+                RoaringKernel::roaring_select(&KERNELS, &left, index),
+                left.select(index)
+            );
+        }
+
+        let result_limit = roaring::EntryLimit::new(3);
+        assert_eq!(
+            RoaringKernel::roaring_intersection(&KERNELS, &left, &right, result_limit),
+            left.intersection(&right, result_limit)
+        );
+        let too_small = roaring::EntryLimit::new(2);
+        assert_eq!(
+            RoaringKernel::roaring_intersection(&KERNELS, &left, &right, too_small),
+            left.intersection(&right, too_small)
+        );
+
+        let duplicate = [1_u32, 1];
+        assert_eq!(
+            RoaringKernel::build_roaring(&KERNELS, &duplicate, left_limit),
+            roaring::RoaringBitmap::try_from_sorted(&duplicate, left_limit)
+        );
+    }
+
+    #[test]
+    fn neighbor_trait_matches_every_explicit_arm_and_access() {
+        let values = [1_u64, 3, 4, 8, 65_536];
+        let limit = neighbor::EntryLimit::new(values.len());
+        for codec in [
+            neighbor::NeighborCodec::EliasFano,
+            neighbor::NeighborCodec::StreamVByte,
+            neighbor::NeighborCodec::DenseIntervals,
+        ] {
+            let direct = match codec {
+                neighbor::NeighborCodec::EliasFano => {
+                    neighbor::EncodedNeighbors::try_elias_fano(&values, limit)
+                }
+                neighbor::NeighborCodec::StreamVByte => {
+                    neighbor::EncodedNeighbors::try_stream_vbyte(&values, limit)
+                }
+                neighbor::NeighborCodec::DenseIntervals => {
+                    neighbor::EncodedNeighbors::try_dense_intervals(&values, limit)
+                }
+            };
+            assert_eq!(
+                NeighborKernel::build_neighbors(&KERNELS, codec, &values, limit),
+                direct
+            );
+
+            let encoded = direct.expect("valid neighbor fixture");
+            assert_eq!(encoded.codec(), codec);
+            for probe in [0_u64, 3, 5, 65_536, u64::MAX] {
+                assert_eq!(
+                    NeighborKernel::neighbors_contains(&KERNELS, &encoded, probe),
+                    encoded.contains(probe)
+                );
+                assert_eq!(
+                    NeighborKernel::neighbors_rank_le(&KERNELS, &encoded, probe),
+                    encoded.rank_le(probe)
+                );
+            }
+            for index in 0..=values.len() {
+                assert_eq!(
+                    NeighborKernel::neighbors_select(&KERNELS, &encoded, index),
+                    encoded.select(index)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn neighbor_trait_matches_cross_arm_intersection_and_errors() {
+        let left = neighbor::EncodedNeighbors::try_stream_vbyte(
+            &[1, 3, 4, 8],
+            neighbor::EntryLimit::new(4),
+        )
+        .expect("valid stream fixture");
+        let right = neighbor::EncodedNeighbors::try_dense_intervals(
+            &[3, 4, 9],
+            neighbor::EntryLimit::new(3),
+        )
+        .expect("valid interval fixture");
+        let limit = neighbor::EntryLimit::new(2);
+        assert_eq!(
+            NeighborKernel::neighbors_intersection(&KERNELS, &left, &right, limit),
+            left.intersection(&right, limit)
+        );
+        let too_small = neighbor::EntryLimit::new(1);
+        assert_eq!(
+            NeighborKernel::neighbors_intersection(&KERNELS, &left, &right, too_small),
+            left.intersection(&right, too_small)
+        );
+
+        let duplicate = [1_u64, 1];
+        let input_limit = neighbor::EntryLimit::new(duplicate.len());
+        assert_eq!(
+            NeighborKernel::build_neighbors(
+                &KERNELS,
+                neighbor::NeighborCodec::StreamVByte,
+                &duplicate,
+                input_limit
+            ),
+            neighbor::EncodedNeighbors::try_stream_vbyte(&duplicate, input_limit)
+        );
+    }
+
+    #[test]
+    fn identity_trait_matches_direct_typed_construction_access_and_errors() {
+        fn vid(epoch: u64, partition: u32, slot: u64) -> VId {
+            VId(identity::IdentityParts::try_new(epoch, partition, slot)
+                .expect("valid identity fixture")
+                .pack())
+        }
+
+        let arbitrary = [vid(7, 2, 9), vid(7, 2, 3), vid(8, 1, 0)];
+        let limits = identity::IdentityColumnLimits::new(arbitrary.len(), 3, usize::MAX);
+        let direct = identity::IdentityColumn::try_new(&arbitrary, limits);
+        assert_eq!(
+            IdentityColumnKernel::build_identity_column(&KERNELS, &arbitrary, limits),
+            direct
+        );
+        let column = direct.expect("valid arbitrary identity fixture");
+        for row in 0..=arbitrary.len() {
+            assert_eq!(
+                IdentityColumnKernel::identity_at(&KERNELS, &column, row),
+                column.get(row)
+            );
+        }
+
+        let sorted = [vid(7, 2, 3), vid(7, 2, 9), vid(8, 1, 0)];
+        let direct_sorted = identity::SortedIdentityColumn::try_new(&sorted, limits);
+        assert_eq!(
+            IdentityColumnKernel::build_sorted_identity_column(&KERNELS, &sorted, limits),
+            direct_sorted
+        );
+        let sorted_column = direct_sorted.expect("valid sorted identity fixture");
+        for row in 0..=sorted.len() {
+            assert_eq!(
+                IdentityColumnKernel::sorted_identity_at(&KERNELS, &sorted_column, row),
+                sorted_column.get(row)
+            );
+        }
+        for probe in [vid(7, 2, 2), vid(7, 2, 9), vid(9, 0, 0)] {
+            assert_eq!(
+                IdentityColumnKernel::identity_lower_bound(&KERNELS, &sorted_column, probe),
+                sorted_column.lower_bound(probe)
+            );
+        }
+
+        let edges = [EId(sorted[0].0), EId(sorted[1].0)];
+        let edge_limits = identity::IdentityColumnLimits::new(edges.len(), 1, usize::MAX);
+        assert_eq!(
+            IdentityColumnKernel::build_identity_column(&KERNELS, &edges, edge_limits),
+            identity::IdentityColumn::try_new(&edges, edge_limits)
+        );
+
+        let small_limit = identity::IdentityColumnLimits::new(1, 1, usize::MAX);
+        assert_eq!(
+            IdentityColumnKernel::build_identity_column(&KERNELS, &arbitrary, small_limit),
+            identity::IdentityColumn::try_new(&arbitrary, small_limit)
+        );
+        assert_eq!(
+            IdentityColumnKernel::build_sorted_identity_column(&KERNELS, &arbitrary, limits),
+            identity::SortedIdentityColumn::try_new(&arbitrary, limits)
         );
     }
 

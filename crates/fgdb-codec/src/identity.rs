@@ -275,6 +275,17 @@ pub enum SizeCalculation {
     PrefixCount,
 }
 
+/// Constructor invariant whose violation is returned instead of panicking.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IdentityConstructionInvariant {
+    /// A row prefix was absent from the dictionary built from those rows.
+    PrefixDictionaryMembership,
+    /// Prefix-index storage was requested with a width outside `0/1/2/4`.
+    PrefixIndexWidth,
+    /// A dictionary index did not fit the preflight-selected storage width.
+    PrefixIndexRange,
+}
+
 /// Checked identity-column construction failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdentityColumnError {
@@ -294,6 +305,15 @@ pub enum IdentityColumnError {
         /// Caller-selected ceiling.
         limit: usize,
     },
+    /// Neither raw rows nor the theoretical one-prefix shared minimum can fit.
+    NoRepresentationFits {
+        /// Exact raw scalar payload bytes.
+        raw_required: usize,
+        /// Smallest possible shared payload for this row count.
+        minimum_shared_required: usize,
+        /// Caller-selected scalar payload ceiling.
+        limit: usize,
+    },
     /// Representation-size arithmetic overflowed.
     SizeOverflow {
         /// Stable calculation name.
@@ -305,6 +325,11 @@ pub enum IdentityColumnError {
         target: AllocationTarget,
         /// Requested rows or entries, according to `target`.
         requested: usize,
+    },
+    /// A private constructor invariant was violated.
+    ConstructionInvariantViolation {
+        /// Stable invariant category.
+        invariant: IdentityConstructionInvariant,
     },
     /// Input to [`SortedIdentityColumn`] decreased at `index`.
     NotSorted {
@@ -334,6 +359,14 @@ impl fmt::Display for IdentityColumnError {
                 formatter,
                 "{representation:?} identity payload needs {required} bytes, limit is {limit}"
             ),
+            Self::NoRepresentationFits {
+                raw_required,
+                minimum_shared_required,
+                limit,
+            } => write!(
+                formatter,
+                "identity payload limit {limit} is below raw size {raw_required} and minimum shared size {minimum_shared_required}"
+            ),
             Self::SizeOverflow { calculation } => {
                 write!(formatter, "identity {calculation:?} arithmetic overflowed")
             }
@@ -341,6 +374,9 @@ impl fmt::Display for IdentityColumnError {
                 formatter,
                 "could not reserve {requested} entries for identity {target:?}"
             ),
+            Self::ConstructionInvariantViolation { invariant } => {
+                write!(formatter, "identity constructor violated {invariant:?}")
+            }
             Self::NotSorted {
                 index,
                 previous,
@@ -480,16 +516,25 @@ impl<T: ElementIdentity> IdentityColumn<T> {
         values: &[T],
         limits: IdentityColumnLimits,
     ) -> Result<Self, IdentityColumnError> {
-        if values.len() > limits.max_rows() {
-            return Err(IdentityColumnError::RowLimitExceeded {
-                rows: values.len(),
-                limit: limits.max_rows(),
-            });
-        }
+        validate_row_limit(values.len(), limits)?;
 
         let raw_payload_len = raw_payload_len(values.len())?;
         if values.is_empty() || limits.max_prefixes() == 0 {
             return Self::try_raw(values, raw_payload_len, limits);
+        }
+
+        let minimum_shared_payload =
+            shared_payload_len(values.len(), 1)?.ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::SharedPayload,
+            })?;
+        if raw_payload_len > limits.max_payload_bytes()
+            && minimum_shared_payload > limits.max_payload_bytes()
+        {
+            return Err(IdentityColumnError::NoRepresentationFits {
+                raw_required: raw_payload_len,
+                minimum_shared_required: minimum_shared_payload,
+                limit: limits.max_payload_bytes(),
+            });
         }
 
         // Collect once, then sort/deduplicate. Incremental sorted insertion is
@@ -502,9 +547,11 @@ impl<T: ElementIdentity> IdentityColumn<T> {
                 requested: values.len(),
             }
         })?;
-        prefixes.extend(values.iter().map(|value| {
-            IdentityPrefix::from_parts(IdentityParts::unpack(value.identity_bits()))
-        }));
+        prefixes.extend(
+            values.iter().map(|value| {
+                IdentityPrefix::from_parts(IdentityParts::unpack(value.identity_bits()))
+            }),
+        );
         prefixes.sort_unstable();
         prefixes.dedup();
 
@@ -541,10 +588,12 @@ impl<T: ElementIdentity> IdentityColumn<T> {
         for value in values {
             let parts = IdentityParts::unpack(value.identity_bits());
             let prefix = IdentityPrefix::from_parts(parts);
-            let index = prefixes
-                .binary_search(&prefix)
-                .expect("constructor populated every row prefix");
-            push_index(&mut indexes, index);
+            let index = prefixes.binary_search(&prefix).map_err(|_| {
+                IdentityColumnError::ConstructionInvariantViolation {
+                    invariant: IdentityConstructionInvariant::PrefixDictionaryMembership,
+                }
+            })?;
+            push_index(&mut indexes, index)?;
             slots.push(slot_be_bytes(parts.monotone_slot()));
         }
 
@@ -662,6 +711,32 @@ impl<T: ElementIdentity> IdentityColumn<T> {
             .map(|identity| identity.identity_bits().to_be_bytes())
     }
 
+    fn compare_row_to_parts(
+        &self,
+        row: usize,
+        probe: IdentityParts,
+    ) -> Option<core::cmp::Ordering> {
+        match &self.storage {
+            IdentityStorage::Raw128(rows) => {
+                Some(IdentityParts::unpack(*rows.get(row)?).cmp(&probe))
+            }
+            IdentityStorage::SharedPrefixFixed {
+                prefixes,
+                indexes,
+                slots,
+            } => {
+                let row_prefix = *prefixes.get(indexes.get(row)?)?;
+                let probe_prefix = IdentityPrefix::from_parts(probe);
+                let row_slot = slot_from_be_bytes(*slots.get(row)?);
+                Some(
+                    row_prefix
+                        .cmp(&probe_prefix)
+                        .then_with(|| row_slot.cmp(&probe.monotone_slot())),
+                )
+            }
+        }
+    }
+
     /// Iterates typed identities in original row order.
     #[must_use]
     pub fn iter(&self) -> IdentityIter<'_, T> {
@@ -709,6 +784,7 @@ impl<T: ElementIdentity> SortedIdentityColumn<T> {
         values: &[T],
         limits: IdentityColumnLimits,
     ) -> Result<Self, IdentityColumnError> {
+        validate_row_limit(values.len(), limits)?;
         for (offset, pair) in values.windows(2).enumerate() {
             if pair[0] > pair[1] {
                 return Err(IdentityColumnError::NotSorted {
@@ -726,15 +802,14 @@ impl<T: ElementIdentity> SortedIdentityColumn<T> {
     /// Returns the first row whose identity is not less than `probe`.
     #[must_use]
     pub fn lower_bound(&self, probe: T) -> usize {
+        let probe = IdentityParts::unpack(probe.identity_bits());
         let mut low = 0;
         let mut high = self.column.len();
         while low < high {
             let middle = low + (high - low) / 2;
-            let value = self
-                .column
-                .get(middle)
-                .expect("binary-search index remains in bounds");
-            if value < probe {
+            let ordering = self.column.compare_row_to_parts(middle, probe);
+            debug_assert!(ordering.is_some(), "validated column lost an in-range row");
+            if ordering == Some(core::cmp::Ordering::Less) {
                 low = middle + 1;
             } else {
                 high = middle;
@@ -778,6 +853,19 @@ impl<T: ElementIdentity> SortedIdentityColumn<T> {
     pub fn into_inner(self) -> IdentityColumn<T> {
         self.column
     }
+}
+
+fn validate_row_limit(
+    rows: usize,
+    limits: IdentityColumnLimits,
+) -> Result<(), IdentityColumnError> {
+    if rows > limits.max_rows() {
+        return Err(IdentityColumnError::RowLimitExceeded {
+            rows,
+            limit: limits.max_rows(),
+        });
+    }
+    Ok(())
 }
 
 fn raw_payload_len(rows: usize) -> Result<usize, IdentityColumnError> {
@@ -850,7 +938,9 @@ fn allocate_indexes(width: usize, rows: usize) -> Result<PrefixIndexes, Identity
             reserve_indexes(&mut indexes, rows)?;
             Ok(PrefixIndexes::U32(indexes))
         }
-        _ => unreachable!("prefix-index preflight returns only 0/1/2/4"),
+        _ => Err(IdentityColumnError::ConstructionInvariantViolation {
+            invariant: IdentityConstructionInvariant::PrefixIndexWidth,
+        }),
     }
 }
 
@@ -863,18 +953,31 @@ fn reserve_indexes<I>(indexes: &mut Vec<I>, rows: usize) -> Result<(), IdentityC
         })
 }
 
-fn push_index(indexes: &mut PrefixIndexes, index: usize) {
+fn push_index(indexes: &mut PrefixIndexes, index: usize) -> Result<(), IdentityColumnError> {
     match indexes {
-        PrefixIndexes::Zero => debug_assert_eq!(index, 0),
-        PrefixIndexes::U8(values) => values
-            .push(u8::try_from(index).expect("one-byte prefix-index preflight bounds every index")),
-        PrefixIndexes::U16(values) => values.push(
-            u16::try_from(index).expect("two-byte prefix-index preflight bounds every index"),
-        ),
-        PrefixIndexes::U32(values) => values.push(
-            u32::try_from(index).expect("four-byte prefix-index preflight bounds every index"),
-        ),
+        PrefixIndexes::Zero if index == 0 => {}
+        PrefixIndexes::Zero => {
+            return Err(IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::PrefixIndexRange,
+            });
+        }
+        PrefixIndexes::U8(values) => values.push(u8::try_from(index).map_err(|_| {
+            IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::PrefixIndexRange,
+            }
+        })?),
+        PrefixIndexes::U16(values) => values.push(u16::try_from(index).map_err(|_| {
+            IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::PrefixIndexRange,
+            }
+        })?),
+        PrefixIndexes::U32(values) => values.push(u32::try_from(index).map_err(|_| {
+            IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::PrefixIndexRange,
+            }
+        })?),
     }
+    Ok(())
 }
 
 const fn slot_be_bytes(slot: u64) -> [u8; SLOT_BYTES] {
@@ -960,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn tuple_packed_and_big_endian_orders_are_exhaustively_equivalent() {
+    fn boundary_tuple_packed_and_big_endian_orders_are_equivalent() {
         let epochs = [0, 1, u64::MAX];
         let partitions = [0, 1, MAX_PARTITION];
         let slots = [0, 1, MAX_SLOT];
@@ -992,6 +1095,78 @@ mod tests {
                 );
                 assert_eq!(IdentityParts::unpack(left.pack()), *left);
             }
+        }
+    }
+
+    #[test]
+    fn contiguous_small_domain_exhaustively_preserves_total_order() {
+        let mut identities = Vec::new();
+        for epoch in 0..4 {
+            for partition in 0..8 {
+                for slot in 0..16 {
+                    identities.push(parts(epoch, partition, slot));
+                }
+            }
+        }
+
+        for (left_index, left) in identities.iter().enumerate() {
+            for (right_index, right) in identities.iter().enumerate() {
+                assert_eq!(
+                    left.cmp(right),
+                    left.pack().cmp(&right.pack()),
+                    "packed order differs at ({left_index}, {right_index})"
+                );
+                assert_eq!(
+                    left.cmp(right),
+                    left.canonical_be_key().cmp(&right.canonical_be_key()),
+                    "big-endian order differs at ({left_index}, {right_index})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn seeded_large_mixed_prefix_order_and_lower_bound_match_slice_oracle() {
+        let prefixes = (0_u64..32)
+            .map(|prefix| (prefix.wrapping_mul(0x9e37_79b9), prefix as u32 * 17))
+            .collect::<Vec<_>>();
+        let mut state = 0xd1b5_4a32_d192_ed03_u64;
+        let mut values = Vec::new();
+        for row in 0..4_096 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let (epoch, partition) = prefixes[row % prefixes.len()];
+            values.push(vid(epoch, partition, state & MAX_SLOT));
+        }
+        values.sort_unstable();
+
+        let sorted = SortedIdentityColumn::try_new(
+            &values,
+            IdentityColumnLimits::new(values.len(), prefixes.len(), usize::MAX),
+        )
+        .unwrap();
+        assert_eq!(
+            sorted.as_column().representation(),
+            IdentityRepresentation::SharedPrefixFixed
+        );
+        assert_eq!(sorted.iter().collect::<Vec<_>>(), values);
+        assert!(
+            values
+                .windows(2)
+                .all(|pair| pair[0].0.to_be_bytes() <= pair[1].0.to_be_bytes())
+        );
+
+        for probe_index in 0..1_024 {
+            state = state
+                .wrapping_mul(2_862_933_555_777_941_757)
+                .wrapping_add(3_037_000_493);
+            let (epoch, partition) = prefixes[probe_index % prefixes.len()];
+            let probe = vid(epoch, partition, state & MAX_SLOT);
+            assert_eq!(
+                sorted.lower_bound(probe),
+                values.partition_point(|value| *value < probe)
+            );
         }
     }
 
@@ -1133,6 +1308,27 @@ mod tests {
             shared_payload_len(1_024, 257).unwrap(),
             Some(257 * 11 + 1_024 * 2 + 1_024 * 6)
         );
+        assert_eq!(
+            allocate_indexes(3, 0),
+            Err(IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::PrefixIndexWidth,
+            })
+        );
+
+        let mut zero_width = PrefixIndexes::Zero;
+        assert_eq!(
+            push_index(&mut zero_width, 1),
+            Err(IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::PrefixIndexRange,
+            })
+        );
+        let mut one_byte = PrefixIndexes::U8(Vec::new());
+        assert_eq!(
+            push_index(&mut one_byte, 256),
+            Err(IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::PrefixIndexRange,
+            })
+        );
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -1185,6 +1381,11 @@ mod tests {
             SortedIdentityColumn::try_new(&unsorted, limits(2, 1)),
             Err(IdentityColumnError::NotSorted { index: 1, .. })
         ));
+        assert_eq!(
+            SortedIdentityColumn::try_new(&unsorted, limits(1, 1)),
+            Err(IdentityColumnError::RowLimitExceeded { rows: 2, limit: 1 }),
+            "resource ceiling must reject before scanning order"
+        );
     }
 
     #[test]
@@ -1199,9 +1400,9 @@ mod tests {
         );
         assert_eq!(
             IdentityColumn::try_new(&values, IdentityColumnLimits::new(256, 1, 1_546)),
-            Err(IdentityColumnError::PayloadLimitExceeded {
-                representation: IdentityRepresentation::SharedPrefixFixed,
-                required: 1_547,
+            Err(IdentityColumnError::NoRepresentationFits {
+                raw_required: 4_096,
+                minimum_shared_required: 1_547,
                 limit: 1_546,
             })
         );
@@ -1209,11 +1410,22 @@ mod tests {
         let raw = vids_with_prefix_count(1, 1);
         assert_eq!(
             IdentityColumn::try_new(&raw, IdentityColumnLimits::new(1, 1, 15)),
-            Err(IdentityColumnError::PayloadLimitExceeded {
-                representation: IdentityRepresentation::Raw128,
-                required: 16,
+            Err(IdentityColumnError::NoRepresentationFits {
+                raw_required: 16,
+                minimum_shared_required: 17,
                 limit: 15,
             })
+        );
+
+        let many = vids_with_prefix_count(4_096, 1);
+        assert_eq!(
+            IdentityColumn::try_new(&many, IdentityColumnLimits::new(many.len(), 1, 0)),
+            Err(IdentityColumnError::NoRepresentationFits {
+                raw_required: many.len() * RAW_ID_BYTES,
+                minimum_shared_required: PREFIX_BYTES + many.len() * SLOT_BYTES,
+                limit: 0,
+            }),
+            "payload impossibility must fail before prefix scratch allocation"
         );
         assert_eq!(
             raw_payload_len(usize::MAX),
