@@ -535,6 +535,13 @@ name = "fgdb-resource"
 version = "0.0.1"
 
 [[package]]
+name = "fgdb-sketch"
+version = "0.0.1"
+dependencies = [
+ "fgdb-collections",
+]
+
+[[package]]
 name = "fgdb-types"
 version = "0.0.1"
 dependencies = [
