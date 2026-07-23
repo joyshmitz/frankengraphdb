@@ -433,6 +433,7 @@ where
     // No `count`-sized delta staging allocation is materialized.
     let mut output = reserve_output(expected)?;
     output.resize(expected, 0);
+    output.fill(0);
     pack_for_validated_by_index(count, base, width, &value_at, &mut output)?;
     Ok(output)
 }
@@ -779,6 +780,16 @@ mod tests {
         assert_eq!(reservation_calls.get(), 1);
         assert_eq!(requested_bytes.get(), Some(expected));
         assert_eq!(encoded.len(), expected);
+
+        let dirty_output = encode_for_by_index_with_output_reservation(
+            values.len(),
+            10_000,
+            5,
+            |index| values[index],
+            |expected| Ok(vec![u8::MAX; expected]),
+        )
+        .expect("dirty caller-owned output must be initialized before packing");
+        assert_eq!(dirty_output, encoded);
 
         // Invalid input is rejected by the allocation-free first pass, so the
         // output reservation seam is never reached.
