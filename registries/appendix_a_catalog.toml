@@ -38,9 +38,9 @@ occurrence_count = 2458
 occurrence_transcript_sha256 = "9878e84c7c72d0e098a66794ce56a00ffdfed62aaf251bc0d87efd665e0a630b"
 
 [target_manifest]
-target_count = 360
+target_count = 366
 projection_fallback_count = 83
-target_source_assignment_sha256 = "c7765d78764616eb16d99957ec1cb26e1863ea67285f5512ba0dd7cf2d093812"
+target_source_assignment_sha256 = "fe41bce715356466560b10148bcfb7fedbba43d1100835808bb8983abead690c"
 
 [maintenance_proof]
 row_id = "catalog:maintenance-proof:appendix-a"
@@ -580,7 +580,7 @@ ambiguity_ids_sha256 = "c87a4d5bba2765dd7de49b5ee0b5d6772b4d06b2673f5675c6239ad0
 
 [[projection_epoch]]
 registry = "logical_object_kinds"
-registry_epoch = 2
+registry_epoch = 3
 
 [[projection_epoch]]
 registry = "physical_record_kinds"
@@ -1129,6 +1129,72 @@ construction_order = 20
 role_predicate = "true"
 max_size_bytes = 16777216
 golden_corpus = "corpus/logical/payload_availability_certificate/"
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-profile"
+object_kind = 0x049a
+name = "TimeAuthorityProfile"
+status = "reserved"
+construction_order = 20
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_profile/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-registry"
+object_kind = 0x049b
+name = "TimeAuthorityRegistry"
+status = "reserved"
+construction_order = 21
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_registry/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:portable-time-authority-observation"
+object_kind = 0x0392
+name = "PortableTimeAuthorityObservation"
+status = "reserved"
+construction_order = 22
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/portable_time_authority_observation/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-observation-import"
+object_kind = 0x0499
+name = "TimeAuthorityObservationImport"
+status = "reserved"
+construction_order = 23
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_observation_import/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:shard-time-authority-projection"
+object_kind = 0x047c
+name = "ShardTimeAuthorityProjection"
+status = "reserved"
+construction_order = 24
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_time_authority_projection/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-validation-evidence"
+object_kind = 0x04a6
+name = "TimeValidationEvidence"
+status = "reserved"
+construction_order = 25
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_validation_evidence/"
+
 [[physical_kind]]
 slice_id = "a02"
 row_id = "a02:physical-kind:ciphertext-record"
@@ -10003,7 +10069,7 @@ symbol = "PortableTimeAuthorityObservation"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0392"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:portable-time-authority-registry-transition-terminal-evidence"
@@ -12433,7 +12499,7 @@ symbol = "ShardTimeAuthorityProjection"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x047c"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:shard-time-authority-retirement-ack"
@@ -12775,7 +12841,7 @@ symbol = "TimeAuthorityObservationImport"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0499"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-profile"
@@ -12784,7 +12850,7 @@ symbol = "TimeAuthorityProfile"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x049a"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-registry"
@@ -12793,7 +12859,7 @@ symbol = "TimeAuthorityRegistry"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x049b"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-registry-transition-receipt"
@@ -12892,7 +12958,7 @@ symbol = "TimeValidationEvidence"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x04a6"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a08:reservation:topology-attempt-closure-proof"
@@ -19672,7 +19738,7 @@ symbol = "PortableTimeAuthorityObservation"
 generic_signature = ""
 source_key = "top|PortableTimeAuthorityObservation"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2161"]
 
 [[top_level_candidate]]
@@ -24172,7 +24238,7 @@ symbol = "ShardTimeAuthorityProjection"
 generic_signature = ""
 source_key = "top|ShardTimeAuthorityProjection"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2163"]
 
 [[top_level_candidate]]
@@ -24782,7 +24848,7 @@ symbol = "TimeAuthorityObservationImport"
 generic_signature = ""
 source_key = "top|TimeAuthorityObservationImport"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2165"]
 
 [[top_level_candidate]]
@@ -24792,7 +24858,7 @@ symbol = "TimeAuthorityProfile"
 generic_signature = ""
 source_key = "top|TimeAuthorityProfile"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2159"]
 
 [[top_level_candidate]]
@@ -24822,7 +24888,7 @@ symbol = "TimeAuthorityRegistry"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|TimeAuthorityRegistry<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2181"]
 
 [[top_level_candidate]]
@@ -24982,7 +25048,7 @@ symbol = "TimeValidationEvidence"
 generic_signature = ""
 source_key = "top|TimeValidationEvidence"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2167"]
 
 [[top_level_candidate]]
@@ -28324,6 +28390,54 @@ slice_id = "a01"
 source_key = "arm|RootAuthorityTrustBody|RootAuthorityTrustBody.artifact_kind|CertifiedLocalRoleTransition"
 target_kind = "union-arm"
 definition_status = "declared"
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-profile"
+target_row_id = "a16:logical-kind:time-authority-profile"
+slice_id = "a16"
+source_key = "top|TimeAuthorityProfile"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-registry"
+target_row_id = "a16:logical-kind:time-authority-registry"
+slice_id = "a16"
+source_key = "top|TimeAuthorityRegistry<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-portable-time-authority-observation"
+target_row_id = "a16:logical-kind:portable-time-authority-observation"
+slice_id = "a16"
+source_key = "top|PortableTimeAuthorityObservation"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-observation-import"
+target_row_id = "a16:logical-kind:time-authority-observation-import"
+slice_id = "a16"
+source_key = "top|TimeAuthorityObservationImport"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-shard-time-authority-projection"
+target_row_id = "a16:logical-kind:shard-time-authority-projection"
+slice_id = "a16"
+source_key = "top|ShardTimeAuthorityProjection"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-validation-evidence"
+target_row_id = "a16:logical-kind:time-validation-evidence"
+slice_id = "a16"
+source_key = "top|TimeValidationEvidence"
+target_kind = "logical-kind"
+definition_status = "declared"
+
 [[source_symbol_disposition]]
 row_id = "a01:source-symbol-disposition:export-leaf"
 slice_id = "a01"

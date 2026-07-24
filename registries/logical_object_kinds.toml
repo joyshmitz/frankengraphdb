@@ -6,7 +6,7 @@ schema_version = 1
 
 [registry]
 name = "logical_object_kinds"
-registry_epoch = 2
+registry_epoch = 3
 
 [[kind]]
 object_kind = 0x0001
@@ -279,6 +279,15 @@ max_size_bytes = 16777216
 golden_corpus = "corpus/logical/payload_availability_certificate/"
 
 [[kind]]
+object_kind = 0x0392
+name = "PortableTimeAuthorityObservation"
+status = "reserved"
+construction_order = 22
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/portable_time_authority_observation/"
+
+[[kind]]
 object_kind = 0x03ad
 name = "RemoteAuthorityConfigurationEvidence"
 status = "reserved"
@@ -439,3 +448,48 @@ construction_order = 10
 role_predicate = "true"
 max_size_bytes = 16777216
 golden_corpus = "corpus/logical/root_authority_trust_body/"
+
+[[kind]]
+object_kind = 0x047c
+name = "ShardTimeAuthorityProjection"
+status = "reserved"
+construction_order = 24
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_time_authority_projection/"
+
+[[kind]]
+object_kind = 0x0499
+name = "TimeAuthorityObservationImport"
+status = "reserved"
+construction_order = 23
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_observation_import/"
+
+[[kind]]
+object_kind = 0x049a
+name = "TimeAuthorityProfile"
+status = "reserved"
+construction_order = 20
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_profile/"
+
+[[kind]]
+object_kind = 0x049b
+name = "TimeAuthorityRegistry"
+status = "reserved"
+construction_order = 21
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_registry/"
+
+[[kind]]
+object_kind = 0x04a6
+name = "TimeValidationEvidence"
+status = "reserved"
+construction_order = 25
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_validation_evidence/"
