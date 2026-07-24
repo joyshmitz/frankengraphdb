@@ -6,7 +6,7 @@ schema_version = 1
 
 [registry]
 name = "durable_fields"
-registry_epoch = 9
+registry_epoch = 10
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
@@ -2962,6 +2962,17 @@ version_status = "reserved"
 max_size_bytes = 65537
 
 [[union]]
+union_name = "RoleTransitionActivationState"
+containing_schema = "RoleTransitionActivationState"
+union_path = "RoleTransitionActivationState"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["RoleTransitionActivationState"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union]]
 union_name = "RootAuthorityTrustArtifactKind"
 containing_schema = "RootAuthorityTrustBody"
 union_path = "RootAuthorityTrustBody.artifact_kind"
@@ -3152,6 +3163,32 @@ payload_sha256 = "3a2d87d0f381667522afda570d38ae9c32537aede9bb42bee73ef3dbb8d5a7
 role_predicate = "true"
 version_status = "reserved"
 max_size_bytes = 65536
+
+[[union_arm]]
+union_name = "RoleTransitionActivationState"
+containing_schema = "RoleTransitionActivationState"
+union_path = "RoleTransitionActivationState"
+arm_tag = 0x0001
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "c664dae3253439d77571c0e6d953dc61c0f44ccb9adc6d5d7b09589a800a61a6"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+union_name = "RoleTransitionActivationState"
+containing_schema = "RoleTransitionActivationState"
+union_path = "RoleTransitionActivationState"
+arm_tag = 0x0002
+source_arm_name = "Shard"
+stable_name = "shard"
+payload_kind = "inline-record"
+payload_sha256 = "2644e1bb6d88382296b949089f6f4ba83801ce6c264b74bfda919899cb9e0f0b"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
 
 [[union_arm]]
 union_name = "RootAuthorityTrustArtifactKind"

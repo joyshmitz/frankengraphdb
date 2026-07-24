@@ -173,7 +173,7 @@ schema_version = 1
 
 [registry]
 name = "durable_fields"
-registry_epoch = 9
+registry_epoch = 10
 
 [[union]]
 union_name = "FixtureTopLevelUnion"
@@ -215,7 +215,7 @@ max_size_bytes = 127
     let (epoch, fields, ordinary_unions, reference_unions) =
         identity::fields_from(&table).expect("ordinary-union fixture models");
 
-    assert_eq!(epoch, 9);
+    assert_eq!(epoch, 10);
     assert!(fields.is_empty());
     assert!(reference_unions.is_empty());
     assert_eq!(ordinary_unions.len(), 1);
@@ -2105,6 +2105,8 @@ fn appendix_a_inline_record_unions_require_exact_payload_digests() {
         ("KeyDestructionTarget", "KmsKeyVersion"),
         ("KeyDestructionTarget", "HsmObject"),
         ("KeyDestructionTarget", "StorageMemberReplica"),
+        ("RoleTransitionActivationState", "Meta"),
+        ("RoleTransitionActivationState", "Shard"),
     ] {
         let mut wrong_payload = real_appendix_catalog();
         let arm = wrong_payload
@@ -2584,6 +2586,47 @@ fn idr_key_destruction_target_consumer_closure_is_exact() {
 }
 
 #[test]
+fn idr_role_transition_activation_state_is_a_logical_backed_whole_schema_union() {
+    let identity = real_identity();
+    let union = identity
+        .ordinary_unions
+        .iter()
+        .find(|union| union.union_name == "RoleTransitionActivationState")
+        .expect("RoleTransitionActivationState ordinary union exists");
+    assert!(
+        union.field_tag.is_none()
+            && union.containing_schema == union.union_name
+            && union.union_path == union.union_name,
+        "the role union must keep the whole-schema top-level shape"
+    );
+    assert_eq!(
+        union.allowed_containing_schemas,
+        vec!["RoleTransitionActivationState".to_owned()],
+        "a whole-schema role union admits only its own object as container"
+    );
+    let logical_parent = identity
+        .logical
+        .iter()
+        .find(|kind| kind.name == "RoleTransitionActivationState")
+        .expect("RoleTransitionActivationState logical kind exists");
+    assert_eq!(
+        logical_parent.status, union.version_status,
+        "the logical parent and the role union must stay lifecycle-identical"
+    );
+    assert!(
+        union.max_size_bytes <= logical_parent.max_size_bytes,
+        "the union bound must stay within the object bound"
+    );
+    assert!(
+        !identity
+            .wire
+            .iter()
+            .any(|wire| wire.name == "RoleTransitionActivationState"),
+        "disjointness: the role union must never gain a same-name wire row"
+    );
+}
+
+#[test]
 fn idr_ordinary_union_container_pin_is_unambiguously_framed() {
     let mut split = wire_backed_top_level_union_fixture();
     split.ordinary_unions[0].allowed_containing_schemas = vec!["A".into(), "B".into()];
@@ -3024,13 +3067,16 @@ fn idr_assignment_history_and_epoch_are_frozen() {
     pre_erratum.ordinary_unions.retain(|union| {
         !matches!(
             union.union_name.as_str(),
-            "KeyDestroyExternalAckRef" | "KeyDestroyFloorRef" | "KeyDestructionTarget"
+            "KeyDestroyExternalAckRef"
+                | "KeyDestroyFloorRef"
+                | "KeyDestructionTarget"
+                | "RoleTransitionActivationState"
         )
     });
     assert_eq!(
-        pre_erratum.ordinary_unions.len() + 3,
+        pre_erratum.ordinary_unions.len() + 4,
         current_union_count,
-        "the historical witness must remove exactly the three post-erratum A15 unions"
+        "the historical witness must remove exactly the three post-erratum A15 unions and the A01 role union"
     );
     rename_logical_command_input_union(&mut pre_erratum, "CommandRef");
     undo_a01_exactness_repair(&mut pre_erratum);
@@ -3463,6 +3509,12 @@ fn idr_reference_targets_resolve() {
             load_bearing.insert(arm.target_schema_id.as_str());
         }
     }
+    // An ordinary union's containing schema is load-bearing too: removing it
+    // orphans the union (and, for a whole-schema role union, its logical
+    // parent contract).
+    for u in &r.ordinary_unions {
+        load_bearing.insert(u.containing_schema.as_str());
+    }
     // Exhaustive single-removal property over every logical kind.
     for victim in r.logical.iter().map(|k| k.name.clone()).collect::<Vec<_>>() {
         let mut mutated = r.clone();
@@ -3471,7 +3523,10 @@ fn idr_reference_targets_resolve() {
         let resolution_fault = violations.iter().any(|v| {
             matches!(
                 v.code.as_str(),
-                "union_arm_unresolved" | "ref_target_unresolved" | "field_unresolved_schema"
+                "union_arm_unresolved"
+                    | "ref_target_unresolved"
+                    | "field_unresolved_schema"
+                    | "ordinary_union_unresolved_schema"
             )
         });
         if load_bearing.contains(victim.as_str()) {

@@ -31,6 +31,7 @@
 //!   reference_union_name_collision reference union shadows another wire type
 //!   ordinary_union_unresolved_schema containing schema has no unique identity class
 //!   ordinary_union_wire_contract_mismatch top-level union/wire cross-index drift
+//!   ordinary_union_logical_contract_mismatch whole-schema role union/logical kind drift
 //!   ordinary_union_container_contract_mismatch open or inconsistent consumer closure
 //!   ordinary_union_arm_duplicate_tag duplicate ordinary-union arm tag
 //!   ordinary_union_arm_metadata_mismatch arm does not match its union owner
@@ -1058,7 +1059,7 @@ pub fn assignment_pins(r: &IdentityRegistries) -> Vec<AssignmentPin> {
     const BOOTSTRAP: &str = "fnv1a64:c756ad93d4fcbcf7";
     const PREBOOTSTRAP: &str = "fnv1a64:d2a221d86d3adc80";
     const WIRE: &str = "fnv1a64:0f02a754916d418a";
-    const FIELDS: &str = "fnv1a64:dd8bfbde5a5b5c3e";
+    const FIELDS: &str = "fnv1a64:22ddf99b2932df3b";
 
     let logical = rows_pin(
         r.logical
@@ -1215,7 +1216,7 @@ pub fn assignment_pins(r: &IdentityRegistries) -> Vec<AssignmentPin> {
         },
         AssignmentPin {
             registry: "durable_fields",
-            expected_epoch: 9,
+            expected_epoch: 10,
             actual_epoch: r.fields_epoch,
             expected_pin: FIELDS,
             actual_pin: fields,
@@ -1973,6 +1974,16 @@ pub fn validate_identity(r: &IdentityRegistries) -> Vec<Violation> {
             .flatten();
         let top_level_wire_backed = top_level_wire_parent
             .is_some_and(|parent| matches!(parent.kind.as_str(), "union" | "discriminant"));
+        // A whole-schema role union of a logical kind (fgdb-a01): the object
+        // body IS the union, so the parent contract is the logical kind row
+        // rather than a same-name wire row, which disjointness forbids.  Arms
+        // are committed by their source-verified payload digests; there is no
+        // wire-variant bijection because the union has no independent wire
+        // encoding surface.
+        let top_level_logical_parent = (top_level_shape && top_level_wire_parent.is_none())
+            .then(|| logical_by_name.get(u.union_name.as_str()).copied())
+            .flatten();
+        let top_level_logical_backed = top_level_logical_parent.is_some();
         let containing_schema_classes =
             usize::from(logical_by_name.contains_key(u.containing_schema.as_str()))
                 + usize::from(physical_names.contains(u.containing_schema.as_str()))
@@ -1990,7 +2001,21 @@ pub fn validate_identity(r: &IdentityRegistries) -> Vec<Violation> {
                 ),
             ));
         }
-        if top_level_shape {
+        if top_level_shape && top_level_logical_backed {
+            let parent = top_level_logical_parent.expect("logical-backed union has a parent");
+            if parent.status != u.version_status
+                || u.max_size_bytes > parent.max_size_bytes
+                || !role_predicate_implies(&u.role_predicate, &parent.role_predicate)
+                || u.allowed_containing_schemas.as_slice() != [u.containing_schema.as_str()]
+            {
+                out.push(v(
+                    "ordinary_union_logical_contract_mismatch",
+                    "durable_fields",
+                    row_id,
+                    "a whole-schema role union requires a same-name logical kind parent with identical lifecycle, a bound within the object bound, no broader role scope, and a self-only containing-schema closure",
+                ));
+            }
+        } else if top_level_shape {
             match top_level_wire_parent {
                 Some(parent)
                     if top_level_wire_backed
@@ -2213,7 +2238,7 @@ pub fn validate_identity(r: &IdentityRegistries) -> Vec<Violation> {
                     ),
                 )),
             }
-        } else if top_level_wire_backed {
+        } else if top_level_wire_backed || top_level_logical_backed {
             for field in anchor_fields {
                 if field.identity_class != "inline"
                     || field.reference_semantics != "none"

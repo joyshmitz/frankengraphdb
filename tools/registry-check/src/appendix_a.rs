@@ -38,12 +38,12 @@ pub const APPENDIX_SHA256: &str =
     "71a48b67304f94568590f79c5b1c1ee4731819aee022c57fece78a7e72bce7f1";
 pub const APPENDIX_HEADING: &str = "## Appendix A — On-Disk Object Formats (normative contract)";
 pub const NEXT_HEADING: &str = "## Appendix B — Graph Intent Log (the semantic vocabulary)";
-pub const EXPECTED_PROJECTION_ROW_COUNT: usize = 357;
+pub const EXPECTED_PROJECTION_ROW_COUNT: usize = 360;
 pub const EXPECTED_PROJECTION_ROW_IDS_SHA256: &str =
-    "590c1a566e09068d103d4d58dcc135684ff53ab637812c15b29e103ca71e553d";
+    "3416a9dad5c442685108dd8ee3ae792d38a807b908dd77378af9a32ec71bec26";
 pub const EXPECTED_PROJECTION_FALLBACK_COUNT: usize = 83;
 pub const EXPECTED_TARGET_SOURCE_ASSIGNMENT_SHA256: &str =
-    "7543f2d271f86683f61c3724968496f62b337a21bf89aa0f93e68d80a8b9602c";
+    "c7765d78764616eb16d99957ec1cb26e1863ea67285f5512ba0dd7cf2d093812";
 pub const EXPECTED_ANNOTATION_COUNT: usize = 0;
 pub const EXPECTED_ANNOTATION_SHA256: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -3712,25 +3712,36 @@ fn verify_ordinary_union_source_contracts(
     }
 }
 
-/// Census field keys covered by a stronger, already-source-verified structural
-/// contract instead of a per-field projection row (fgdb-z35a).
+/// Census keys covered by a stronger, already-source-verified structural
+/// contract instead of a per-key projection row (fgdb-z35a, generalized to
+/// unions and arms for the fgdb-a01 role/wire union families).
 ///
-/// Two closed classes:
-/// - arm-payload interior: the field's container path traverses a union arm
+/// Two closed classes, applied uniformly to field, union, and arm keys:
+/// - arm-payload interior: the key's container path traverses a union arm
 ///   that has a catalog union-arm target; the arm row's `payload_sha256`
-///   commits the payload shape byte-exactly, so an interior field cannot
-///   drift without the arm contract failing first.
-/// - wire-type interior: the field's schema owner is a targeted wire-type
+///   commits the payload shape byte-exactly, so interior fields, nested
+///   unions, and nested arms cannot drift without the arm contract failing
+///   first.
+/// - wire-type interior: the key's schema family is a targeted wire-type
 ///   projection row; the wire row's exact envelope contract commits the
-///   interior, and the identity constitution deliberately resolves no
-///   durable-field host in the wire class.
+///   interior (including embedded closed unions such as result-role tags),
+///   and the identity constitution deliberately resolves no durable-field
+///   host — and permits no anchored embedded union — in the wire class.
 ///
-/// Lookup is catalog-global by symbol: identity-class disjointness makes
-/// schema owners unique, while census field occurrences remain slice-scoped.
-fn covered_interior_field_keys(
-    catalog: &Catalog,
-    census: &AppendixSourceCensus,
-) -> BTreeSet<String> {
+/// Wire coverage matches the generic-free schema family: one registered wire
+/// row commits the envelope for every expansion of its family, so
+/// `StrongCiphertextRef<T>` interiors are committed by the
+/// `StrongCiphertextRef` row.  Non-generic owners have family == owner, and
+/// non-wire generic families stay uncovered.  Lookup is catalog-global by
+/// symbol: identity-class disjointness makes schema owners unique, while
+/// census occurrences remain slice-scoped.
+struct CoveredInteriorKeys {
+    fields: BTreeSet<String>,
+    unions: BTreeSet<String>,
+    arms: BTreeSet<String>,
+}
+
+fn covered_interior_keys(catalog: &Catalog, census: &AppendixSourceCensus) -> CoveredInteriorKeys {
     let mut arm_prefixes: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for target in &catalog.targets {
         if target.target_kind != "union-arm" {
@@ -3761,21 +3772,37 @@ fn covered_interior_field_keys(
         .filter(|row| row.row_kind == "wire-type" && targeted_row_ids.contains(row.row_id.as_str()))
         .map(|row| row.canonical_symbol.as_str())
         .collect();
-    let mut covered = BTreeSet::new();
-    for field in &census.fields {
-        let owner = field.key.schema_owner.as_str();
-        let arm_covered = arm_prefixes.get(owner).is_some_and(|prefixes| {
+    let arm_prefix_covers = |owner: &str, container_path: &str| {
+        arm_prefixes.get(owner).is_some_and(|prefixes| {
             prefixes
                 .iter()
-                .any(|prefix| field.key.path.starts_with(prefix.as_str()))
-        });
-        // Wire coverage matches the generic-free schema family: one
-        // registered wire row commits the envelope for every expansion of
-        // its family, so `StrongCiphertextRef<T>` interiors are committed by
-        // the `StrongCiphertextRef` row.  Non-generic owners have
-        // family == owner, and non-wire generic families stay uncovered.
-        if arm_covered || wire_symbols.contains(field.key.schema_family.as_str()) {
-            covered.insert(field.key.source_key());
+                .any(|prefix| container_path.starts_with(prefix.as_str()))
+        })
+    };
+    let mut covered = CoveredInteriorKeys {
+        fields: BTreeSet::new(),
+        unions: BTreeSet::new(),
+        arms: BTreeSet::new(),
+    };
+    for field in &census.fields {
+        if arm_prefix_covers(field.key.schema_owner.as_str(), &field.key.path)
+            || wire_symbols.contains(field.key.schema_family.as_str())
+        {
+            covered.fields.insert(field.key.source_key());
+        }
+    }
+    for union in &census.unions {
+        if arm_prefix_covers(union.key.schema_owner.as_str(), &union.key.union_path)
+            || wire_symbols.contains(union.key.schema_family.as_str())
+        {
+            covered.unions.insert(union.key.source_key());
+        }
+    }
+    for arm in &census.arms {
+        if arm_prefix_covers(arm.key.schema_owner.as_str(), &arm.key.union_path)
+            || wire_symbols.contains(arm.key.schema_family.as_str())
+        {
+            covered.arms.insert(arm.key.source_key());
         }
     }
     covered
@@ -3795,7 +3822,7 @@ fn verify_complete_field_census_coverage(
     census: &AppendixSourceCensus,
     out: &mut Vec<Violation>,
 ) {
-    let covered = covered_interior_field_keys(catalog, census);
+    let covered = covered_interior_keys(catalog, census);
     for slice in catalog
         .slices
         .iter()
@@ -3809,13 +3836,18 @@ fn verify_complete_field_census_coverage(
             // A missing slice is already reported by the structural census check.
             continue;
         };
-        let mut coverage: BTreeSet<&str> = catalog
+        let mut targeted: BTreeSet<&str> = catalog
             .targets
             .iter()
-            .filter(|row| row.slice_id == slice.id && row.source_key.starts_with("field|"))
+            .filter(|row| {
+                row.slice_id == slice.id
+                    && (row.source_key.starts_with("field|")
+                        || (row.target_kind == "union" && row.source_key.starts_with("union|"))
+                        || (row.target_kind == "union-arm" && row.source_key.starts_with("arm|")))
+            })
             .map(|row| row.source_key.as_str())
             .collect();
-        coverage.extend(
+        targeted.extend(
             catalog
                 .ambiguity_adjudications
                 .iter()
@@ -3828,19 +3860,56 @@ fn verify_complete_field_census_coverage(
                         )
                 })
                 .flat_map(|row| row.resolved_source_keys.iter().map(String::as_str))
-                .filter(|key| key.starts_with("field|")),
+                .filter(|key| {
+                    key.starts_with("field|")
+                        || key.starts_with("union|")
+                        || key.starts_with("arm|")
+                }),
         );
-        for field in &source_slice.fields {
-            let key = field.key.source_key();
-            if !coverage.contains(key.as_str()) && !covered.contains(&key) {
-                out.push(Violation::new(
-                    "source_complete_field_census_uncovered",
-                    &slice.id,
-                    format!(
-                        "complete slice census field key {key:?} has no field target, approved adjudication, or covering arm/wire interior contract"
-                    ),
-                ));
-            }
+        check_census_class(
+            "field",
+            source_slice.fields.iter().map(|row| row.key.source_key()),
+            &targeted,
+            &covered.fields,
+            &slice.id,
+            out,
+        );
+        check_census_class(
+            "union",
+            source_slice.unions.iter().map(|row| row.key.source_key()),
+            &targeted,
+            &covered.unions,
+            &slice.id,
+            out,
+        );
+        check_census_class(
+            "arm",
+            source_slice.arms.iter().map(|row| row.key.source_key()),
+            &targeted,
+            &covered.arms,
+            &slice.id,
+            out,
+        );
+    }
+}
+
+fn check_census_class(
+    class: &str,
+    keys: impl Iterator<Item = String>,
+    targeted: &BTreeSet<&str>,
+    covered_keys: &BTreeSet<String>,
+    slice_id: &str,
+    out: &mut Vec<Violation>,
+) {
+    for key in keys {
+        if !targeted.contains(key.as_str()) && !covered_keys.contains(&key) {
+            out.push(Violation::new(
+                "source_complete_census_uncovered",
+                slice_id,
+                format!(
+                    "complete slice census {class} key {key:?} has no target, approved adjudication, or covering arm/wire interior contract"
+                ),
+            ));
         }
     }
 }
@@ -3869,7 +3938,7 @@ fn verify_ambiguity_adjudications(
         .map(|row| (row.ambiguity_source_key.as_str(), row))
         .collect();
     let top_level_source_coverage = approved_top_level_source_coverage(catalog);
-    let covered_interior_keys = covered_interior_field_keys(catalog, census);
+    let covered = covered_interior_keys(catalog, census);
     let mut projected_source_keys: BTreeSet<&str> = catalog
         .targets
         .iter()
@@ -3877,10 +3946,13 @@ fn verify_ambiguity_adjudications(
         .map(|row| row.source_key.as_str())
         .collect();
     projected_source_keys.extend(top_level_source_coverage.keys().copied());
-    // Arm-payload and wire-interior census fields are projected through their
-    // covering arm/wire contracts (fgdb-z35a): maps-to-source may resolve to
-    // them, and not-a-durable-schema over them is contradictory.
-    projected_source_keys.extend(covered_interior_keys.iter().map(String::as_str));
+    // Arm-payload and wire-interior census fields, unions, and arms are
+    // projected through their covering arm/wire contracts (fgdb-z35a):
+    // maps-to-source may resolve to them, and not-a-durable-schema over them
+    // is contradictory.
+    projected_source_keys.extend(covered.fields.iter().map(String::as_str));
+    projected_source_keys.extend(covered.unions.iter().map(String::as_str));
+    projected_source_keys.extend(covered.arms.iter().map(String::as_str));
     for (source_key, row) in &actual {
         let Some((slice_id, ambiguity, locations)) = expected.get(*source_key) else {
             out.push(Violation::new(
@@ -7425,21 +7497,12 @@ fn validate_catalog_metadata(catalog: &Catalog, out: &mut Vec<Violation>) {
                 "complete slice has no source-backed targets",
             ));
         }
-        // The complete-field census law is enforced against the raw source
-        // census by `verify_complete_field_census_coverage` (fgdb-z35a):
-        // arm-payload and wire-interior census fields are covered by their
-        // arm/wire contracts, which a catalog-only sha-equality pin cannot
-        // express.
-        let mut union_keys: Vec<&str> = slice_targets
-            .iter()
-            .filter(|row| row.source_key.starts_with("union|"))
-            .map(|row| row.source_key.as_str())
-            .collect();
-        let mut arm_keys: Vec<&str> = slice_targets
-            .iter()
-            .filter(|row| row.target_kind == "union-arm" && row.source_key.starts_with("arm|"))
-            .map(|row| row.source_key.as_str())
-            .collect();
+        // The complete-slice field, union, and arm census laws are enforced
+        // against the raw source census by
+        // `verify_complete_field_census_coverage` (fgdb-z35a, generalized for
+        // fgdb-a01): arm-payload and wire-interior census keys are covered by
+        // their arm/wire contracts, which a catalog-only sha-equality pin
+        // cannot express.
         for source_key in catalog
             .ambiguity_adjudications
             .iter()
@@ -7455,10 +7518,6 @@ fn validate_catalog_metadata(catalog: &Catalog, out: &mut Vec<Violation>) {
         {
             if source_key.starts_with("top|") {
                 top_keys.push(source_key);
-            } else if source_key.starts_with("union|") {
-                union_keys.push(source_key);
-            } else if source_key.starts_with("arm|") {
-                arm_keys.push(source_key);
             }
         }
         validate_census_pin(
@@ -7467,22 +7526,6 @@ fn validate_catalog_metadata(catalog: &Catalog, out: &mut Vec<Violation>) {
             slice.top_level_candidate_count,
             &slice.top_level_candidate_ids_sha256,
             top_keys,
-            out,
-        );
-        validate_census_pin(
-            &slice.id,
-            "complete_union",
-            slice.union_candidate_count,
-            &slice.union_candidate_ids_sha256,
-            union_keys,
-            out,
-        );
-        validate_census_pin(
-            &slice.id,
-            "complete_arm",
-            slice.arm_candidate_count,
-            &slice.arm_candidate_ids_sha256,
-            arm_keys,
             out,
         );
         let ambiguity_keys = approved_final_ambiguity_keys_with(
@@ -10222,6 +10265,16 @@ stable_name = "Ready"
         fields: Vec<FieldCandidate>,
         ambiguities: Vec<AmbiguityCandidate>,
     ) -> AppendixSourceCensus {
+        census_with_slice_rows(slice_id, fields, Vec::new(), Vec::new(), ambiguities)
+    }
+
+    fn census_with_slice_rows(
+        slice_id: &str,
+        fields: Vec<FieldCandidate>,
+        unions: Vec<UnionCandidate>,
+        arms: Vec<ArmCandidate>,
+        ambiguities: Vec<AmbiguityCandidate>,
+    ) -> AppendixSourceCensus {
         AppendixSourceCensus {
             source_start_line: 1,
             source_end_line: 1,
@@ -10235,19 +10288,51 @@ stable_name = "Ready"
                 source_sha256: String::new(),
                 schemas: Vec::new(),
                 fields: fields.clone(),
-                unions: Vec::new(),
-                arms: Vec::new(),
+                unions: unions.clone(),
+                arms: arms.clone(),
                 ambiguities,
                 counts: CensusCounts::default(),
                 transcripts: empty_transcripts(),
             }],
             schemas: Vec::new(),
             fields,
-            unions: Vec::new(),
-            arms: Vec::new(),
+            unions,
+            arms,
             ambiguities: Vec::new(),
             counts: CensusCounts::default(),
             transcripts: empty_transcripts(),
+        }
+    }
+
+    fn union_candidate(owner: &str, union_path: &str) -> UnionCandidate {
+        UnionCandidate {
+            key: crate::appendix_source::UnionCandidateKey {
+                schema_family: owner.to_owned(),
+                schema_owner: owner.to_owned(),
+                union_path: union_path.to_owned(),
+            },
+            occurrence_count: 1,
+            arm_names: Vec::new(),
+            arm_name_sets: Vec::new(),
+            arm_set_conflict: false,
+            parsed_arm_count: 0,
+            unparsed_arm_count: 0,
+            locations: Vec::new(),
+            evidence_lines: Vec::new(),
+        }
+    }
+
+    fn arm_candidate(owner: &str, union_path: &str, arm_name: &str) -> ArmCandidate {
+        ArmCandidate {
+            key: crate::appendix_source::ArmCandidateKey {
+                schema_family: owner.to_owned(),
+                schema_owner: owner.to_owned(),
+                union_path: union_path.to_owned(),
+                arm_name: arm_name.to_owned(),
+            },
+            payload_sha256s: Vec::new(),
+            payload_conflict: false,
+            locations: Vec::new(),
         }
     }
 
@@ -10279,7 +10364,7 @@ stable_name = "Ready"
     fn uncovered_field_violations(violations: &[Violation]) -> Vec<&Violation> {
         violations
             .iter()
-            .filter(|violation| violation.code == "source_complete_field_census_uncovered")
+            .filter(|violation| violation.code == "source_complete_census_uncovered")
             .collect()
     }
 
@@ -10380,6 +10465,83 @@ stable_name = "Ready"
         assert!(
             uncovered[0].msg.contains("NotAWireFamily"),
             "a generic family without a wire row stays uncovered: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn nested_union_and_arm_census_keys_are_covered_by_the_targeted_parent_arm() {
+        let census = census_with_slice_rows(
+            "a01",
+            Vec::new(),
+            vec![union_candidate(
+                "FixtureState",
+                "FixtureState.phase.Started.mode",
+            )],
+            vec![arm_candidate(
+                "FixtureState",
+                "FixtureState.phase.Started.mode",
+                "Fast",
+            )],
+            Vec::new(),
+        );
+
+        let bare = catalog_with_complete_a01();
+        let mut violations = Vec::new();
+        verify_complete_field_census_coverage(&bare, &census, &mut violations);
+        assert_eq!(
+            uncovered_field_violations(&violations).len(),
+            2,
+            "a nested union and its arm without a covering parent-arm target must fail closed: {violations:?}"
+        );
+
+        let mut covered = catalog_with_complete_a01();
+        covered.targets.push(arm_target(
+            "a01",
+            "FixtureState",
+            "FixtureState.phase",
+            "Started",
+        ));
+        let mut violations = Vec::new();
+        verify_complete_field_census_coverage(&covered, &census, &mut violations);
+        assert!(
+            uncovered_field_violations(&violations).is_empty(),
+            "the parent arm's payload contract commits nested unions and arms: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn wire_interior_union_and_arm_census_keys_are_covered_by_the_wire_envelope() {
+        let census = census_with_slice_rows(
+            "a01",
+            Vec::new(),
+            vec![
+                union_candidate("ConsensusDomain", "ConsensusDomain.group_role"),
+                union_candidate("NotARegisteredWireType", "NotARegisteredWireType.mode"),
+            ],
+            vec![
+                arm_candidate("ConsensusDomain", "ConsensusDomain.group_role", "Shard"),
+                arm_candidate(
+                    "NotARegisteredWireType",
+                    "NotARegisteredWireType.mode",
+                    "Fast",
+                ),
+            ],
+            Vec::new(),
+        );
+        let catalog = catalog_with_complete_a01();
+        let mut violations = Vec::new();
+        verify_complete_field_census_coverage(&catalog, &census, &mut violations);
+        let uncovered = uncovered_field_violations(&violations);
+        assert_eq!(
+            uncovered.len(),
+            2,
+            "only the unregistered host's union and arm stay uncovered: {violations:?}"
+        );
+        assert!(
+            uncovered
+                .iter()
+                .all(|violation| violation.msg.contains("NotARegisteredWireType")),
+            "the targeted wire envelope covers its interior unions and arms: {violations:?}"
         );
     }
 

@@ -38,9 +38,9 @@ occurrence_count = 2458
 occurrence_transcript_sha256 = "9878e84c7c72d0e098a66794ce56a00ffdfed62aaf251bc0d87efd665e0a630b"
 
 [target_manifest]
-target_count = 357
+target_count = 360
 projection_fallback_count = 83
-target_source_assignment_sha256 = "7543f2d271f86683f61c3724968496f62b337a21bf89aa0f93e68d80a8b9602c"
+target_source_assignment_sha256 = "c7765d78764616eb16d99957ec1cb26e1863ea67285f5512ba0dd7cf2d093812"
 
 [maintenance_proof]
 row_id = "catalog:maintenance-proof:appendix-a"
@@ -600,7 +600,7 @@ registry_epoch = 8
 
 [[projection_epoch]]
 registry = "durable_fields"
-registry_epoch = 9
+registry_epoch = 10
 
 [[logical_kind]]
 slice_id = "a03"
@@ -5276,6 +5276,19 @@ role_predicate = "true"
 version_status = "reserved"
 max_size_bytes = 1
 
+[[union]]
+slice_id = "a01"
+row_id = "a01:union:role-transition-activation-state-b697734229d2f385"
+union_name = "RoleTransitionActivationState"
+containing_schema = "RoleTransitionActivationState"
+union_path = "RoleTransitionActivationState"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["RoleTransitionActivationState"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
 [[union_arm]]
 slice_id = "a01"
 row_id = "a01:union-arm:trust-transition-genesis-7d05462fa7162820"
@@ -5348,6 +5361,36 @@ payload_kind = "unit"
 role_predicate = "true"
 version_status = "reserved"
 max_size_bytes = 1
+
+[[union_arm]]
+slice_id = "a01"
+row_id = "a01:union-arm:role-transition-activation-state-meta-8ca5ecf8a282ab12"
+union_name = "RoleTransitionActivationState"
+containing_schema = "RoleTransitionActivationState"
+union_path = "RoleTransitionActivationState"
+arm_tag = 0x0001
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "c664dae3253439d77571c0e6d953dc61c0f44ccb9adc6d5d7b09589a800a61a6"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a01"
+row_id = "a01:union-arm:role-transition-activation-state-shard-bf70654ace79406b"
+union_name = "RoleTransitionActivationState"
+containing_schema = "RoleTransitionActivationState"
+union_path = "RoleTransitionActivationState"
+arm_tag = 0x0002
+source_arm_name = "Shard"
+stable_name = "shard"
+payload_kind = "inline-record"
+payload_sha256 = "2644e1bb6d88382296b949089f6f4ba83801ce6c264b74bfda919899cb9e0f0b"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
 [[reference_union]]
 slice_id = "a10"
 row_id = "a10:reference-union:logical-command-record-logical-command-input-ref"
@@ -28216,6 +28259,30 @@ target_row_id = "a01:union:root-authority-trust-artifact-kind-b66d666db888ca16"
 slice_id = "a01"
 source_key = "union|RootAuthorityTrustBody|RootAuthorityTrustBody.artifact_kind"
 target_kind = "union"
+definition_status = "declared"
+
+[[target]]
+row_id = "a01:target:union-role-transition-activation-state-b697734229d2f385"
+target_row_id = "a01:union:role-transition-activation-state-b697734229d2f385"
+slice_id = "a01"
+source_key = "union|RoleTransitionActivationState|RoleTransitionActivationState"
+target_kind = "union"
+definition_status = "declared"
+
+[[target]]
+row_id = "a01:target:union-arm-role-transition-activation-state-meta-8ca5ecf8a282ab12"
+target_row_id = "a01:union-arm:role-transition-activation-state-meta-8ca5ecf8a282ab12"
+slice_id = "a01"
+source_key = "arm|RoleTransitionActivationState|RoleTransitionActivationState|Meta"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a01:target:union-arm-role-transition-activation-state-shard-bf70654ace79406b"
+target_row_id = "a01:union-arm:role-transition-activation-state-shard-bf70654ace79406b"
+slice_id = "a01"
+source_key = "arm|RoleTransitionActivationState|RoleTransitionActivationState|Shard"
+target_kind = "union-arm"
 definition_status = "declared"
 
 [[target]]
