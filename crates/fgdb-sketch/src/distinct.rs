@@ -26,6 +26,10 @@ pub const ESTIMATE_FRACTION_BITS: u32 = 32;
 
 const DISTINCT_HASH_DOMAIN: u64 = 0x4647_4442_4449_5354;
 const LN_2_Q64: u128 = 0xb172_17f7_d1cf_79ab;
+const ACCURACY_PARTS_PER_MILLION: u64 = 1_000_000;
+const MODELED_DEVIATION_MULTIPLIER: u64 = 4;
+const LINEAR_COUNTING_RSE_COEFFICIENT_PPM: u64 = 1_300_000;
+const RAW_HARMONIC_RSE_COEFFICIENT_PPM: u64 = 1_040_000;
 const CANONICAL_MAGIC: [u8; 8] = *b"FGDBDST1";
 const CANONICAL_VERSION: u16 = 1;
 const CANONICAL_HEADER_BYTES: usize = 8 + 2 + 1 + 1 + 8 + 8 + 8;
@@ -292,6 +296,129 @@ pub enum DistinctEstimateMethod {
     LinearCounting,
     /// Bias-constant harmonic register estimator.
     RawHarmonic,
+}
+
+/// Explicit statistical model for distinct-estimator calibration.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DistinctAccuracyModel {
+    /// Distinct observations produce independent ideal uniform index/rank draws,
+    /// with branch error described by the conventional asymptotic variance
+    /// approximation.
+    ///
+    /// The production hash is deterministic and finite-width. This model does
+    /// not claim independence for that hash family and excludes 64-bit birthday
+    /// collisions, finite-domain bias, small-sample normality, and adversarially
+    /// selected observations.
+    IdealizedIndependentUniformHashStreamWithAsymptoticBranchVariance,
+}
+
+/// Model-qualified calibration envelope for one estimator branch and state.
+///
+/// Linear counting uses an outward-rounded `1.30 / sqrt(occupied_registers)`
+/// modeled relative-standard-error scale over its intended small-range load.
+/// Raw harmonic estimation uses the conventional HyperLogLog asymptotic
+/// `1.04 / sqrt(register_count)` scale. Both admit four modeled deviations.
+///
+/// This is calibration metadata, not a confidence guarantee, invariant, or
+/// safety property. It is deliberately absent from canonical state and merge
+/// identity: merge and codec laws are unconditional and do not depend on this
+/// statistical model.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct DistinctModeledAccuracyContract {
+    /// Register-index precision of the validated sketch.
+    precision: u8,
+    /// Complete register count, `2^precision`.
+    register_count: usize,
+    /// Estimator branch selected by the validated register state.
+    estimator_method: DistinctEstimateMethod,
+    /// Zero registers observed by the selected estimator.
+    zero_registers: usize,
+    /// Register population governing the branch's modeled error scale.
+    effective_sample_count: usize,
+    /// Outward-rounded modeled relative-standard-error coefficient in ppm.
+    standard_error_coefficient_ppm: u64,
+    /// `floor(sqrt(effective_sample_count))`.
+    standard_error_denominator: usize,
+    /// Number of modeled standard deviations admitted for calibration.
+    deviation_multiplier: u64,
+    /// Named model qualifying every probabilistic input.
+    model: DistinctAccuracyModel,
+}
+
+impl DistinctModeledAccuracyContract {
+    /// Register-index precision of the validated sketch.
+    #[must_use]
+    pub const fn precision(self) -> u8 {
+        self.precision
+    }
+
+    /// Complete register count, `2^precision`.
+    #[must_use]
+    pub const fn register_count(self) -> usize {
+        self.register_count
+    }
+
+    /// Estimator branch selected by the validated register state.
+    #[must_use]
+    pub const fn estimator_method(self) -> DistinctEstimateMethod {
+        self.estimator_method
+    }
+
+    /// Zero registers observed by the selected estimator.
+    #[must_use]
+    pub const fn zero_registers(self) -> usize {
+        self.zero_registers
+    }
+
+    /// Register population governing the modeled error scale.
+    #[must_use]
+    pub const fn effective_sample_count(self) -> usize {
+        self.effective_sample_count
+    }
+
+    /// Outward-rounded modeled relative-standard-error coefficient in ppm.
+    #[must_use]
+    pub const fn standard_error_coefficient_parts_per_million(self) -> u64 {
+        self.standard_error_coefficient_ppm
+    }
+
+    /// Conservative `floor(sqrt(effective_sample_count))` divisor.
+    #[must_use]
+    pub const fn standard_error_denominator(self) -> usize {
+        self.standard_error_denominator
+    }
+
+    /// Number of modeled standard deviations admitted for calibration.
+    #[must_use]
+    pub const fn deviation_multiplier(self) -> u64 {
+        self.deviation_multiplier
+    }
+
+    /// Named model qualifying this calibration envelope.
+    #[must_use]
+    pub const fn model(self) -> DistinctAccuracyModel {
+        self.model
+    }
+
+    /// Modeled relative-error calibration ceiling in parts per million.
+    #[must_use]
+    pub fn modeled_relative_error_parts_per_million_ceiling(self) -> u64 {
+        let numerator =
+            u128::from(self.standard_error_coefficient_ppm) * u128::from(self.deviation_multiplier);
+        let denominator = self.standard_error_denominator as u128;
+        u64::try_from(numerator.div_ceil(denominator)).unwrap_or(u64::MAX)
+    }
+
+    /// Modeled absolute-error calibration ceiling for an exact population size.
+    #[must_use]
+    pub fn modeled_maximum_absolute_error(self, exact_distinct_count: u64) -> u64 {
+        let numerator = u128::from(exact_distinct_count)
+            * u128::from(self.standard_error_coefficient_ppm)
+            * u128::from(self.deviation_multiplier);
+        let denominator =
+            (self.standard_error_denominator as u128) * u128::from(ACCURACY_PARTS_PER_MILLION);
+        u64::try_from(numerator.div_ceil(denominator)).unwrap_or(u64::MAX)
+    }
 }
 
 /// Deterministic Q32 cardinality estimate.
@@ -561,6 +688,47 @@ impl DistinctSketch {
         self.estimate_fixed().rounded()
     }
 
+    /// Returns branch-specific model-qualified calibration metadata.
+    ///
+    /// The canonical shape is validated before deriving the contract. `None`
+    /// identifies the exact empty linear-counting state, whose estimate is zero
+    /// without a probabilistic claim. A nonempty result describes only the
+    /// idealized model named by [`DistinctAccuracyModel`]; it does not weaken or
+    /// qualify unconditional state, merge, or codec laws.
+    pub fn try_modeled_accuracy_contract(
+        &self,
+    ) -> Result<Option<DistinctModeledAccuracyContract>, DistinctError> {
+        self.validate_canonical_shape()?;
+        let estimate = self.estimate_fixed();
+        let register_count = self.registers.len();
+        let (effective_sample_count, standard_error_coefficient_ppm) = match estimate.method {
+            DistinctEstimateMethod::LinearCounting => (
+                register_count - estimate.zero_registers,
+                LINEAR_COUNTING_RSE_COEFFICIENT_PPM,
+            ),
+            DistinctEstimateMethod::RawHarmonic => {
+                (register_count, RAW_HARMONIC_RSE_COEFFICIENT_PPM)
+            }
+        };
+        if effective_sample_count == 0 {
+            return Ok(None);
+        }
+        let standard_error_denominator = effective_sample_count.isqrt();
+        debug_assert!(standard_error_denominator != 0);
+        Ok(Some(DistinctModeledAccuracyContract {
+            precision: self.profile.precision,
+            register_count,
+            estimator_method: estimate.method,
+            zero_registers: estimate.zero_registers,
+            effective_sample_count,
+            standard_error_coefficient_ppm,
+            standard_error_denominator,
+            deviation_multiplier: MODELED_DEVIATION_MULTIPLIER,
+            model: DistinctAccuracyModel::
+                IdealizedIndependentUniformHashStreamWithAsymptoticBranchVariance,
+        }))
+    }
+
     fn observe_hash(&mut self, hash: u64) -> bool {
         let (index, rank) = index_and_rank(hash, self.profile.precision);
         let Some(register) = self.registers.get_mut(index) else {
@@ -823,11 +991,13 @@ impl<'bytes> DistinctDecoder<'bytes> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CANONICAL_HEADER_BYTES, CANONICAL_MAGIC, DEFAULT_MAX_REGISTERS, DistinctCodecError,
-        DistinctDecodeLimits, DistinctDecodeResource, DistinctError, DistinctEstimateMethod,
-        DistinctHashAlgorithm, DistinctProfile, DistinctSketch, MAX_PRECISION, MIN_PRECISION,
-        hash_key, index_and_rank, maximum_rank,
+        CANONICAL_HEADER_BYTES, CANONICAL_MAGIC, DEFAULT_MAX_REGISTERS, DistinctAccuracyModel,
+        DistinctCodecError, DistinctDecodeLimits, DistinctDecodeResource, DistinctError,
+        DistinctEstimate, DistinctEstimateMethod, DistinctHashAlgorithm, DistinctProfile,
+        DistinctSketch, ESTIMATE_FRACTION_BITS, MAX_PRECISION, MIN_PRECISION, hash_key,
+        index_and_rank, maximum_rank,
     };
+    use crate::graph_accuracy_fixtures::{canonical_edge_bytes, named_graph_fixtures};
 
     const VERSION_OFFSET: usize = CANONICAL_MAGIC.len();
     const HASH_ALGORITHM_OFFSET: usize = VERSION_OFFSET + 2;
@@ -870,6 +1040,30 @@ mod tests {
             value.observe(&key.to_le_bytes());
         }
         Ok(value)
+    }
+
+    fn independent_modeled_error_bounds(
+        exact_distinct_count: u64,
+        method: DistinctEstimateMethod,
+        register_count: usize,
+        zero_registers: usize,
+    ) -> (u64, u64) {
+        let (coefficient_ppm, effective_sample_count) = match method {
+            DistinctEstimateMethod::LinearCounting => {
+                (1_300_000_u64, register_count - zero_registers)
+            }
+            DistinctEstimateMethod::RawHarmonic => (1_040_000_u64, register_count),
+        };
+        let denominator = effective_sample_count.isqrt() as u128;
+        assert!(denominator != 0);
+        let relative_numerator = u128::from(coefficient_ppm) * 4;
+        let relative_ppm =
+            u64::try_from(relative_numerator.div_ceil(denominator)).expect("test bound fits u64");
+        let absolute_numerator = u128::from(exact_distinct_count) * u128::from(coefficient_ppm) * 4;
+        let absolute_denominator = denominator * 1_000_000;
+        let absolute = u64::try_from(absolute_numerator.div_ceil(absolute_denominator))
+            .expect("test bound fits u64");
+        (relative_ppm, absolute)
     }
 
     #[test]
@@ -1401,6 +1595,208 @@ mod tests {
             assert_eq!(value, before);
         }
         Ok(())
+    }
+
+    #[test]
+    fn modeled_accuracy_contract_is_branch_specific_and_matches_exact_vectors() {
+        let small_profile = DistinctProfile {
+            precision: MIN_PRECISION,
+            hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
+            seed: 0x4143_4355_5241_4359,
+            max_registers: 1 << MIN_PRECISION,
+        };
+        let empty = DistinctSketch::try_new(small_profile).expect("small valid profile");
+        assert_eq!(
+            empty.estimate_fixed().method,
+            DistinctEstimateMethod::LinearCounting
+        );
+        assert_eq!(
+            empty
+                .try_modeled_accuracy_contract()
+                .expect("canonical empty state"),
+            None
+        );
+
+        let mut linear = empty.clone();
+        linear.registers[..5].fill(1);
+        let linear_estimate = linear.estimate_fixed();
+        assert_eq!(
+            linear_estimate.method,
+            DistinctEstimateMethod::LinearCounting
+        );
+        assert_eq!(linear_estimate.zero_registers, 11);
+        let linear_contract = linear
+            .try_modeled_accuracy_contract()
+            .expect("canonical linear-counting state")
+            .expect("nonempty state has modeled calibration metadata");
+        assert_eq!(linear_contract.precision(), MIN_PRECISION);
+        assert_eq!(linear_contract.register_count(), 16);
+        assert_eq!(
+            linear_contract.estimator_method(),
+            DistinctEstimateMethod::LinearCounting
+        );
+        assert_eq!(linear_contract.zero_registers(), 11);
+        assert_eq!(linear_contract.effective_sample_count(), 5);
+        assert_eq!(
+            linear_contract.standard_error_coefficient_parts_per_million(),
+            1_300_000
+        );
+        assert_eq!(linear_contract.standard_error_denominator(), 2);
+        assert_eq!(linear_contract.deviation_multiplier(), 4);
+        assert_eq!(
+            linear_contract.model(),
+            DistinctAccuracyModel::
+                IdealizedIndependentUniformHashStreamWithAsymptoticBranchVariance
+        );
+        assert_eq!(
+            linear_contract.modeled_relative_error_parts_per_million_ceiling(),
+            2_600_000
+        );
+        assert_eq!(linear_contract.modeled_maximum_absolute_error(7), 19);
+
+        let mut raw = empty;
+        raw.registers.fill(1);
+        let raw_estimate = raw.estimate_fixed();
+        assert_eq!(raw_estimate.method, DistinctEstimateMethod::RawHarmonic);
+        assert_eq!(raw_estimate.zero_registers, 0);
+        let raw_contract = raw
+            .try_modeled_accuracy_contract()
+            .expect("canonical raw-harmonic state")
+            .expect("nonempty state has modeled calibration metadata");
+        assert_eq!(raw_contract.precision(), MIN_PRECISION);
+        assert_eq!(raw_contract.register_count(), 16);
+        assert_eq!(
+            raw_contract.estimator_method(),
+            DistinctEstimateMethod::RawHarmonic
+        );
+        assert_eq!(raw_contract.zero_registers(), 0);
+        assert_eq!(raw_contract.effective_sample_count(), 16);
+        assert_eq!(
+            raw_contract.standard_error_coefficient_parts_per_million(),
+            1_040_000
+        );
+        assert_eq!(raw_contract.standard_error_denominator(), 4);
+        assert_eq!(
+            raw_contract.modeled_relative_error_parts_per_million_ceiling(),
+            1_040_000
+        );
+        assert_eq!(raw_contract.modeled_maximum_absolute_error(13), 14);
+    }
+
+    #[test]
+    fn fixed_point_estimate_rounding_and_saturation_match_exact_vectors() {
+        let below_half = DistinctEstimate {
+            scaled: (7_u128 << ESTIMATE_FRACTION_BITS)
+                + ((1_u128 << (ESTIMATE_FRACTION_BITS - 1)) - 1),
+            method: DistinctEstimateMethod::LinearCounting,
+            zero_registers: 1,
+        };
+        assert_eq!(below_half.floor(), 7);
+        assert_eq!(below_half.rounded(), 7);
+
+        let exact_half = DistinctEstimate {
+            scaled: (7_u128 << ESTIMATE_FRACTION_BITS) + (1_u128 << (ESTIMATE_FRACTION_BITS - 1)),
+            method: DistinctEstimateMethod::RawHarmonic,
+            zero_registers: 0,
+        };
+        assert_eq!(exact_half.floor(), 7);
+        assert_eq!(exact_half.rounded(), 8);
+
+        let above_u64 = DistinctEstimate {
+            scaled: (u128::from(u64::MAX) + 1) << ESTIMATE_FRACTION_BITS,
+            method: DistinctEstimateMethod::RawHarmonic,
+            zero_registers: 0,
+        };
+        assert_eq!(above_u64.floor(), u64::MAX);
+        assert_eq!(above_u64.rounded(), u64::MAX);
+    }
+
+    #[test]
+    fn named_graph_population_calibration_uses_independent_branch_bounds() {
+        const SEEDS: [u64; 3] = [
+            0x4449_5354_0000_0001,
+            0x4449_5354_0000_0002,
+            0x4449_5354_0000_0003,
+        ];
+        const BRANCH_PROFILES: [(u8, DistinctEstimateMethod); 2] = [
+            (12, DistinctEstimateMethod::LinearCounting),
+            (8, DistinctEstimateMethod::RawHarmonic),
+        ];
+
+        for fixture in named_graph_fixtures() {
+            let exact =
+                u64::try_from(fixture.edges.len()).expect("fixture edge count fits canonical u64");
+            for seed in SEEDS {
+                for (precision, expected_method) in BRANCH_PROFILES {
+                    let register_count = 1_usize << precision;
+                    let profile = DistinctProfile {
+                        precision,
+                        hash_algorithm: DistinctHashAlgorithm::SeededHasherV1,
+                        seed,
+                        max_registers: register_count,
+                    };
+                    let mut value =
+                        DistinctSketch::try_new(profile).expect("calibration profile is bounded");
+                    let mut population_hashes = Vec::with_capacity(fixture.edges.len());
+                    for &(left, right) in &fixture.edges {
+                        let observation = canonical_edge_bytes(left, right);
+                        population_hashes.push(hash_key(
+                            profile.hash_algorithm,
+                            profile.seed,
+                            &observation,
+                        ));
+                        value.observe(&observation);
+                    }
+                    population_hashes.sort_unstable();
+                    assert!(
+                        population_hashes.windows(2).all(|pair| pair[0] != pair[1]),
+                        "fixture={} seed={seed:#018x} precision={precision}: complete finite-hash \
+                         population contains a collision",
+                        fixture.name
+                    );
+
+                    let estimate = value.estimate_fixed();
+                    assert_eq!(
+                        estimate.method, expected_method,
+                        "fixture={} seed={seed:#018x} precision={precision}",
+                        fixture.name
+                    );
+                    let contract = value
+                        .try_modeled_accuracy_contract()
+                        .expect("canonical calibration state")
+                        .expect("named fixture is nonempty");
+                    let (independent_relative_ppm, independent_absolute_bound) =
+                        independent_modeled_error_bounds(
+                            exact,
+                            estimate.method,
+                            register_count,
+                            estimate.zero_registers,
+                        );
+                    assert_eq!(
+                        contract.modeled_relative_error_parts_per_million_ceiling(),
+                        independent_relative_ppm
+                    );
+                    assert_eq!(
+                        contract.modeled_maximum_absolute_error(exact),
+                        independent_absolute_bound
+                    );
+                    assert!(independent_absolute_bound < exact);
+
+                    let rounded = estimate.rounded();
+                    let error = rounded.abs_diff(exact);
+                    assert!(
+                        error <= independent_absolute_bound,
+                        "fixture={} seed={seed:#018x} precision={precision} method={:?} \
+                         exact={exact} estimate={rounded} error={error} \
+                         calibration_bound={independent_absolute_bound} \
+                         modeled_relative_ppm={independent_relative_ppm} model={:?}",
+                        fixture.name,
+                        estimate.method,
+                        contract.model()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
