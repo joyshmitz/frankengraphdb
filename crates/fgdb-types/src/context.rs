@@ -49,7 +49,7 @@ impl ObligationTracker {
     fn acquire_generation(&self) -> Result<ObligationGeneration, ObligationAcquireFailure> {
         let generation = self
             .next_generation
-            .fetch_update(
+            .try_update(
                 Ordering::AcqRel,
                 Ordering::Acquire,
                 |current| match current {
@@ -66,7 +66,7 @@ impl ObligationTracker {
 
     fn increment_live(&self) -> Result<(), ObligationAcquireFailure> {
         self.live
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_add(1)
             })
             .map(|_| ())
@@ -76,7 +76,7 @@ impl ObligationTracker {
     fn decrement_live(&self) {
         let decremented = self
             .live
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_sub(1)
             });
         debug_assert!(
