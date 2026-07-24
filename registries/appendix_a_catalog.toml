@@ -38,9 +38,9 @@ occurrence_count = 2458
 occurrence_transcript_sha256 = "9878e84c7c72d0e098a66794ce56a00ffdfed62aaf251bc0d87efd665e0a630b"
 
 [target_manifest]
-target_count = 425
+target_count = 455
 projection_fallback_count = 83
-target_source_assignment_sha256 = "0f396a00c79383cd79621111d117db5654232f550485fa473dc1cb9cda9806c0"
+target_source_assignment_sha256 = "9e7c97be64bbc9bca0a8f2b7ecb3ca398ce8c4449ad5d7c34d1d53326eeb2c3f"
 
 [maintenance_proof]
 row_id = "catalog:maintenance-proof:appendix-a"
@@ -580,7 +580,7 @@ ambiguity_ids_sha256 = "c87a4d5bba2765dd7de49b5ee0b5d6772b4d06b2673f5675c6239ad0
 
 [[projection_epoch]]
 registry = "logical_object_kinds"
-registry_epoch = 5
+registry_epoch = 6
 
 [[projection_epoch]]
 registry = "physical_record_kinds"
@@ -1337,6 +1337,336 @@ construction_order = 79
 role_predicate = "true"
 max_size_bytes = 16777216
 golden_corpus = "corpus/logical/restore_identity_key_disposition_evidence/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:macaroon-root-issuance-receipt"
+object_kind = 0x0332
+name = "MacaroonRootIssuanceReceipt"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/macaroon_root_issuance_receipt/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:offline-issuer-verification-service-contract"
+object_kind = 0x0375
+name = "OfflineIssuerVerificationServiceContract"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/offline_issuer_verification_service_contract/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:offline-macaroon-issuer-epoch-fence-receipt"
+object_kind = 0x0378
+name = "OfflineMacaroonIssuerEpochFenceReceipt"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/offline_macaroon_issuer_epoch_fence_receipt/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:portable-archive-grant-lineage-proof"
+object_kind = 0x0382
+name = "PortableArchiveGrantLineageProof"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/portable_archive_grant_lineage_proof/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:portable-continuity-authority-observation"
+object_kind = 0x0385
+name = "PortableContinuityAuthorityObservation"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/portable_continuity_authority_observation/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:portable-restore-source-lease-lineage-proof"
+object_kind = 0x038d
+name = "PortableRestoreSourceLeaseLineageProof"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/portable_restore_source_lease_lineage_proof/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:portable-time-authority-registry-transition-terminal-evidence"
+object_kind = 0x0393
+name = "PortableTimeAuthorityRegistryTransitionTerminalEvidence"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/portable_time_authority_registry_transition_terminal_evidence/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:portable-time-expiry-attestation"
+object_kind = 0x0394
+name = "PortableTimeExpiryAttestation"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/portable_time_expiry_attestation/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:pre-bootstrap-portable-time-expiry-attestation"
+object_kind = 0x0397
+name = "PreBootstrapPortableTimeExpiryAttestation"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/pre_bootstrap_portable_time_expiry_attestation/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-epoch-transition-plan"
+object_kind = 0x0495
+name = "TimeAuthorityEpochTransitionPlan"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_epoch_transition_plan/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-issuance-fence"
+object_kind = 0x0498
+name = "TimeAuthorityIssuanceFence"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_issuance_fence/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-shutdown-receipt"
+object_kind = 0x049e
+name = "TimeAuthorityShutdownReceipt"
+status = "reserved"
+construction_order = 27
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_shutdown_receipt/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:offline-macaroon-issuer-epoch-cohort"
+object_kind = 0x0377
+name = "OfflineMacaroonIssuerEpochCohort"
+status = "reserved"
+construction_order = 28
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/offline_macaroon_issuer_epoch_cohort/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:macaroon-root-issuance-record"
+object_kind = 0x0333
+name = "MacaroonRootIssuanceRecord"
+status = "reserved"
+construction_order = 30
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/macaroon_root_issuance_record/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:offline-issuer-verification-service-floor"
+object_kind = 0x0376
+name = "OfflineIssuerVerificationServiceFloor"
+status = "reserved"
+construction_order = 32
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/offline_issuer_verification_service_floor/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-bound-subject-inventory"
+object_kind = 0x04a0
+name = "TimeBoundSubjectInventory"
+status = "reserved"
+construction_order = 33
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_bound_subject_inventory/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-bound-subject-inventory-proof"
+object_kind = 0x04a1
+name = "TimeBoundSubjectInventoryProof"
+status = "reserved"
+construction_order = 34
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_bound_subject_inventory_proof/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:shard-time-bound-subject-inventory-certificate"
+object_kind = 0x047f
+name = "ShardTimeBoundSubjectInventoryCertificate"
+status = "reserved"
+construction_order = 35
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_time_bound_subject_inventory_certificate/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:shard-time-bound-subject-retirement-proof"
+object_kind = 0x0480
+name = "ShardTimeBoundSubjectRetirementProof"
+status = "reserved"
+construction_order = 36
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_time_bound_subject_retirement_proof/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:restore-source-lease-record"
+object_kind = 0x03f9
+name = "RestoreSourceLeaseRecord"
+status = "reserved"
+construction_order = 45
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/restore_source_lease_record/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:shard-continuity-authority-projection"
+object_kind = 0x0445
+name = "ShardContinuityAuthorityProjection"
+status = "reserved"
+construction_order = 50
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_continuity_authority_projection/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:shard-restore-source-lease-projection"
+object_kind = 0x0475
+name = "ShardRestoreSourceLeaseProjection"
+status = "reserved"
+construction_order = 50
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_restore_source_lease_projection/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:shard-time-authority-retirement-floor"
+object_kind = 0x047e
+name = "ShardTimeAuthorityRetirementFloor"
+status = "reserved"
+construction_order = 51
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_time_authority_retirement_floor/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:shard-time-authority-retirement-ack"
+object_kind = 0x047d
+name = "ShardTimeAuthorityRetirementAck"
+status = "reserved"
+construction_order = 52
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_time_authority_retirement_ack/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-drain-hold"
+object_kind = 0x0494
+name = "TimeAuthorityDrainHold"
+status = "reserved"
+construction_order = 55
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_drain_hold/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:continuity-authority-observation-import"
+object_kind = 0x0280
+name = "ContinuityAuthorityObservationImport"
+status = "reserved"
+construction_order = 56
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/continuity_authority_observation_import/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-epoch-transition-record"
+object_kind = 0x0496
+name = "TimeAuthorityEpochTransitionRecord"
+status = "reserved"
+construction_order = 60
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_epoch_transition_record/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-bound-subject-retirement-proof"
+object_kind = 0x04a2
+name = "TimeBoundSubjectRetirementProof"
+status = "reserved"
+construction_order = 61
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_bound_subject_retirement_proof/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:verifier-key-retirement-floor"
+object_kind = 0x04b8
+name = "VerifierKeyRetirementFloor"
+status = "reserved"
+construction_order = 62
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/verifier_key_retirement_floor/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:time-authority-transition-terminal-summary"
+object_kind = 0x049f
+name = "TimeAuthorityTransitionTerminalSummary"
+status = "reserved"
+construction_order = 65
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_authority_transition_terminal_summary/"
 
 [[physical_kind]]
 slice_id = "a02"
@@ -8066,7 +8396,7 @@ symbol = "ContinuityAuthorityObservationImport"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0280"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a10:reservation:control-command"
@@ -9947,7 +10277,7 @@ symbol = "MacaroonRootIssuanceReceipt"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0332"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:macaroon-root-issuance-record"
@@ -9956,7 +10286,7 @@ symbol = "MacaroonRootIssuanceRecord"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0333"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a14:reservation:mandatory-inventory"
@@ -10577,7 +10907,7 @@ symbol = "OfflineIssuerVerificationServiceContract"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0375"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:offline-issuer-verification-service-floor"
@@ -10586,7 +10916,7 @@ symbol = "OfflineIssuerVerificationServiceFloor"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0376"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:offline-macaroon-issuer-epoch-cohort"
@@ -10595,7 +10925,7 @@ symbol = "OfflineMacaroonIssuerEpochCohort"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0377"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:offline-macaroon-issuer-epoch-fence-receipt"
@@ -10604,7 +10934,7 @@ symbol = "OfflineMacaroonIssuerEpochFenceReceipt"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0378"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a07:reservation:order-attempt-retirement-evidence"
@@ -10721,7 +11051,7 @@ symbol = "PortableArchiveGrantLineageProof"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0382"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a15:reservation:portable-archive-source-release-completion-terminal-evidence"
@@ -10748,7 +11078,7 @@ symbol = "PortableContinuityAuthorityObservation"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0385"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a15:reservation:portable-external-action-terminal-evidence"
@@ -10829,7 +11159,7 @@ symbol = "PortableRestoreSourceLeaseLineageProof"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x038d"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a18:reservation:portable-restore-source-lease-release-terminal-evidence"
@@ -10883,7 +11213,7 @@ symbol = "PortableTimeAuthorityRegistryTransitionTerminalEvidence"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0393"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:portable-time-expiry-attestation"
@@ -10892,7 +11222,7 @@ symbol = "PortableTimeExpiryAttestation"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0394"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a17:reservation:pre-bootstrap-dispatch-terminal-accumulator"
@@ -10919,7 +11249,7 @@ symbol = "PreBootstrapPortableTimeExpiryAttestation"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0397"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a19:reservation:pre-bootstrap-reservation-claim-canonical-import-record"
@@ -12026,7 +12356,7 @@ symbol = "RestoreSourceLeaseRecord"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x03f9"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a18:reservation:restore-source-lease-release-operation-record"
@@ -12782,7 +13112,7 @@ symbol = "ShardContinuityAuthorityProjection"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0445"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a06:reservation:shard-continuity-service-floor"
@@ -13232,7 +13562,7 @@ symbol = "ShardRestoreSourceLeaseProjection"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0475"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a18:reservation:shard-restore-terminal-tombstone"
@@ -13313,7 +13643,7 @@ symbol = "ShardTimeAuthorityRetirementAck"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x047d"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:shard-time-authority-retirement-floor"
@@ -13322,7 +13652,7 @@ symbol = "ShardTimeAuthorityRetirementFloor"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x047e"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:shard-time-bound-subject-inventory-certificate"
@@ -13331,7 +13661,7 @@ symbol = "ShardTimeBoundSubjectInventoryCertificate"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x047f"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:shard-time-bound-subject-retirement-proof"
@@ -13340,7 +13670,7 @@ symbol = "ShardTimeBoundSubjectRetirementProof"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0480"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a06:reservation:shard-topology-reconfiguration-floor"
@@ -13601,7 +13931,7 @@ symbol = "TimeAuthorityDrainHold"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0494"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-epoch-transition-plan"
@@ -13610,7 +13940,7 @@ symbol = "TimeAuthorityEpochTransitionPlan"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0495"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-epoch-transition-record"
@@ -13619,7 +13949,7 @@ symbol = "TimeAuthorityEpochTransitionRecord"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0496"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-issuance-closing-receipt"
@@ -13637,7 +13967,7 @@ symbol = "TimeAuthorityIssuanceFence"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x0498"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-observation-import"
@@ -13691,7 +14021,7 @@ symbol = "TimeAuthorityShutdownReceipt"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x049e"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-authority-transition-terminal-summary"
@@ -13700,7 +14030,7 @@ symbol = "TimeAuthorityTransitionTerminalSummary"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x049f"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-bound-subject-inventory"
@@ -13709,7 +14039,7 @@ symbol = "TimeBoundSubjectInventory"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x04a0"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-bound-subject-inventory-proof"
@@ -13718,7 +14048,7 @@ symbol = "TimeBoundSubjectInventoryProof"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x04a1"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-bound-subject-retirement-proof"
@@ -13727,7 +14057,7 @@ symbol = "TimeBoundSubjectRetirementProof"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x04a2"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:time-observation-service-retention-record"
@@ -13970,7 +14300,7 @@ symbol = "VerifierKeyRetirementFloor"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x04b8"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a07:reservation:visible-audit-outcome-index"
@@ -16513,7 +16843,7 @@ symbol = "ContinuityAuthorityObservationImport"
 generic_signature = "<Role>"
 source_key = "top|ContinuityAuthorityObservationImport<Role>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2227"]
 
 [[top_level_candidate]]
@@ -19533,7 +19863,7 @@ symbol = "MacaroonRootIssuanceReceipt"
 generic_signature = ""
 source_key = "top|MacaroonRootIssuanceReceipt"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2173"]
 
 [[top_level_candidate]]
@@ -19543,7 +19873,7 @@ symbol = "MacaroonRootIssuanceRecord"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|MacaroonRootIssuanceRecord<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2173"]
 
 [[top_level_candidate]]
@@ -20083,7 +20413,7 @@ symbol = "OfflineIssuerVerificationServiceContract"
 generic_signature = ""
 source_key = "top|OfflineIssuerVerificationServiceContract"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2199"]
 
 [[top_level_candidate]]
@@ -20093,7 +20423,7 @@ symbol = "OfflineIssuerVerificationServiceFloor"
 generic_signature = ""
 source_key = "top|OfflineIssuerVerificationServiceFloor"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2199"]
 
 [[top_level_candidate]]
@@ -20103,7 +20433,7 @@ symbol = "OfflineMacaroonIssuerEpochCohort"
 generic_signature = ""
 source_key = "top|OfflineMacaroonIssuerEpochCohort"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2175"]
 
 [[top_level_candidate]]
@@ -20113,7 +20443,7 @@ symbol = "OfflineMacaroonIssuerEpochFenceReceipt"
 generic_signature = ""
 source_key = "top|OfflineMacaroonIssuerEpochFenceReceipt"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2175"]
 
 [[top_level_candidate]]
@@ -20283,7 +20613,7 @@ symbol = "PortableArchiveGrantLineageProof"
 generic_signature = ""
 source_key = "top|PortableArchiveGrantLineageProof"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2231"]
 
 [[top_level_candidate]]
@@ -20313,7 +20643,7 @@ symbol = "PortableContinuityAuthorityObservation"
 generic_signature = ""
 source_key = "top|PortableContinuityAuthorityObservation"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2225"]
 
 [[top_level_candidate]]
@@ -20483,7 +20813,7 @@ symbol = "PortableRestoreSourceLeaseLineageProof"
 generic_signature = ""
 source_key = "top|PortableRestoreSourceLeaseLineageProof"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2235"]
 
 [[top_level_candidate]]
@@ -20553,7 +20883,7 @@ symbol = "PortableTimeAuthorityRegistryTransitionTerminalEvidence"
 generic_signature = ""
 source_key = "top|PortableTimeAuthorityRegistryTransitionTerminalEvidence"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2217"]
 
 [[top_level_candidate]]
@@ -20563,7 +20893,7 @@ symbol = "PortableTimeExpiryAttestation"
 generic_signature = ""
 source_key = "top|PortableTimeExpiryAttestation"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2211"]
 
 [[top_level_candidate]]
@@ -20733,7 +21063,7 @@ symbol = "PreBootstrapPortableTimeExpiryAttestation"
 generic_signature = ""
 source_key = "top|PreBootstrapPortableTimeExpiryAttestation"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2213"]
 
 [[top_level_candidate]]
@@ -23233,7 +23563,7 @@ symbol = "RestoreSourceLeaseRecord"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|RestoreSourceLeaseRecord<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2237"]
 
 [[top_level_candidate]]
@@ -24393,7 +24723,7 @@ symbol = "ShardContinuityAuthorityProjection"
 generic_signature = ""
 source_key = "top|ShardContinuityAuthorityProjection"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2225"]
 
 [[top_level_candidate]]
@@ -24933,7 +25263,7 @@ symbol = "ShardRestoreSourceLeaseProjection"
 generic_signature = ""
 source_key = "top|ShardRestoreSourceLeaseProjection"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2239"]
 
 [[top_level_candidate]]
@@ -25053,7 +25383,7 @@ symbol = "ShardTimeAuthorityRetirementAck"
 generic_signature = ""
 source_key = "top|ShardTimeAuthorityRetirementAck"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2215"]
 
 [[top_level_candidate]]
@@ -25063,7 +25393,7 @@ symbol = "ShardTimeAuthorityRetirementFloor"
 generic_signature = ""
 source_key = "top|ShardTimeAuthorityRetirementFloor"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2205"]
 
 [[top_level_candidate]]
@@ -25073,7 +25403,7 @@ symbol = "ShardTimeBoundSubjectInventoryCertificate"
 generic_signature = ""
 source_key = "top|ShardTimeBoundSubjectInventoryCertificate"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2197"]
 
 [[top_level_candidate]]
@@ -25083,7 +25413,7 @@ symbol = "ShardTimeBoundSubjectRetirementProof"
 generic_signature = ""
 source_key = "top|ShardTimeBoundSubjectRetirementProof"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2207"]
 
 [[top_level_candidate]]
@@ -25603,7 +25933,7 @@ symbol = "TimeAuthorityDrainHold"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|TimeAuthorityDrainHold<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2199"]
 
 [[top_level_candidate]]
@@ -25613,7 +25943,7 @@ symbol = "TimeAuthorityEpochTransitionPlan"
 generic_signature = ""
 source_key = "top|TimeAuthorityEpochTransitionPlan"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2217"]
 
 [[top_level_candidate]]
@@ -25623,7 +25953,7 @@ symbol = "TimeAuthorityEpochTransitionRecord"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|TimeAuthorityEpochTransitionRecord<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2217"]
 
 [[top_level_candidate]]
@@ -25643,7 +25973,7 @@ symbol = "TimeAuthorityIssuanceFence"
 generic_signature = ""
 source_key = "top|TimeAuthorityIssuanceFence"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2195"]
 
 [[top_level_candidate]]
@@ -25733,7 +26063,7 @@ symbol = "TimeAuthorityShutdownReceipt"
 generic_signature = ""
 source_key = "top|TimeAuthorityShutdownReceipt"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2215"]
 
 [[top_level_candidate]]
@@ -25753,7 +26083,7 @@ symbol = "TimeAuthorityTransitionTerminalSummary"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|TimeAuthorityTransitionTerminalSummary<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2209"]
 
 [[top_level_candidate]]
@@ -25773,7 +26103,7 @@ symbol = "TimeBoundSubjectInventory"
 generic_signature = "<Role:Local|Meta|Shard>"
 source_key = "top|TimeBoundSubjectInventory<Role:Local|Meta|Shard>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2197"]
 
 [[top_level_candidate]]
@@ -25783,7 +26113,7 @@ symbol = "TimeBoundSubjectInventoryProof"
 generic_signature = "<Role>"
 source_key = "top|TimeBoundSubjectInventoryProof<Role>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2197"]
 
 [[top_level_candidate]]
@@ -25793,7 +26123,7 @@ symbol = "TimeBoundSubjectRetirementProof"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|TimeBoundSubjectRetirementProof<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2207"]
 
 [[top_level_candidate]]
@@ -26193,7 +26523,7 @@ symbol = "VerifierKeyRetirementFloor"
 generic_signature = ""
 source_key = "top|VerifierKeyRetirementFloor"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2215"]
 
 [[top_level_candidate]]
@@ -29713,6 +30043,246 @@ target_row_id = "a16:union-arm:restore-identity-key-disposition-evidence-cloned-
 slice_id = "a16"
 source_key = "arm|RestoreIdentityKeyDispositionEvidence|RestoreIdentityKeyDispositionEvidence|ClonedFreshIdentity"
 target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-macaroon-root-issuance-receipt"
+target_row_id = "a16:logical-kind:macaroon-root-issuance-receipt"
+slice_id = "a16"
+source_key = "top|MacaroonRootIssuanceReceipt"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-offline-issuer-verification-service-contract"
+target_row_id = "a16:logical-kind:offline-issuer-verification-service-contract"
+slice_id = "a16"
+source_key = "top|OfflineIssuerVerificationServiceContract"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-offline-macaroon-issuer-epoch-fence-receipt"
+target_row_id = "a16:logical-kind:offline-macaroon-issuer-epoch-fence-receipt"
+slice_id = "a16"
+source_key = "top|OfflineMacaroonIssuerEpochFenceReceipt"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-portable-archive-grant-lineage-proof"
+target_row_id = "a16:logical-kind:portable-archive-grant-lineage-proof"
+slice_id = "a16"
+source_key = "top|PortableArchiveGrantLineageProof"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-portable-continuity-authority-observation"
+target_row_id = "a16:logical-kind:portable-continuity-authority-observation"
+slice_id = "a16"
+source_key = "top|PortableContinuityAuthorityObservation"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-portable-restore-source-lease-lineage-proof"
+target_row_id = "a16:logical-kind:portable-restore-source-lease-lineage-proof"
+slice_id = "a16"
+source_key = "top|PortableRestoreSourceLeaseLineageProof"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-portable-time-authority-registry-transition-terminal-evidence"
+target_row_id = "a16:logical-kind:portable-time-authority-registry-transition-terminal-evidence"
+slice_id = "a16"
+source_key = "top|PortableTimeAuthorityRegistryTransitionTerminalEvidence"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-portable-time-expiry-attestation"
+target_row_id = "a16:logical-kind:portable-time-expiry-attestation"
+slice_id = "a16"
+source_key = "top|PortableTimeExpiryAttestation"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-pre-bootstrap-portable-time-expiry-attestation"
+target_row_id = "a16:logical-kind:pre-bootstrap-portable-time-expiry-attestation"
+slice_id = "a16"
+source_key = "top|PreBootstrapPortableTimeExpiryAttestation"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-epoch-transition-plan"
+target_row_id = "a16:logical-kind:time-authority-epoch-transition-plan"
+slice_id = "a16"
+source_key = "top|TimeAuthorityEpochTransitionPlan"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-issuance-fence"
+target_row_id = "a16:logical-kind:time-authority-issuance-fence"
+slice_id = "a16"
+source_key = "top|TimeAuthorityIssuanceFence"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-shutdown-receipt"
+target_row_id = "a16:logical-kind:time-authority-shutdown-receipt"
+slice_id = "a16"
+source_key = "top|TimeAuthorityShutdownReceipt"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-offline-macaroon-issuer-epoch-cohort"
+target_row_id = "a16:logical-kind:offline-macaroon-issuer-epoch-cohort"
+slice_id = "a16"
+source_key = "top|OfflineMacaroonIssuerEpochCohort"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-macaroon-root-issuance-record"
+target_row_id = "a16:logical-kind:macaroon-root-issuance-record"
+slice_id = "a16"
+source_key = "top|MacaroonRootIssuanceRecord<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-offline-issuer-verification-service-floor"
+target_row_id = "a16:logical-kind:offline-issuer-verification-service-floor"
+slice_id = "a16"
+source_key = "top|OfflineIssuerVerificationServiceFloor"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-bound-subject-inventory"
+target_row_id = "a16:logical-kind:time-bound-subject-inventory"
+slice_id = "a16"
+source_key = "top|TimeBoundSubjectInventory<Role:Local|Meta|Shard>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-bound-subject-inventory-proof"
+target_row_id = "a16:logical-kind:time-bound-subject-inventory-proof"
+slice_id = "a16"
+source_key = "top|TimeBoundSubjectInventoryProof<Role>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-shard-time-bound-subject-inventory-certificate"
+target_row_id = "a16:logical-kind:shard-time-bound-subject-inventory-certificate"
+slice_id = "a16"
+source_key = "top|ShardTimeBoundSubjectInventoryCertificate"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-shard-time-bound-subject-retirement-proof"
+target_row_id = "a16:logical-kind:shard-time-bound-subject-retirement-proof"
+slice_id = "a16"
+source_key = "top|ShardTimeBoundSubjectRetirementProof"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-restore-source-lease-record"
+target_row_id = "a16:logical-kind:restore-source-lease-record"
+slice_id = "a16"
+source_key = "top|RestoreSourceLeaseRecord<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-shard-continuity-authority-projection"
+target_row_id = "a16:logical-kind:shard-continuity-authority-projection"
+slice_id = "a16"
+source_key = "top|ShardContinuityAuthorityProjection"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-shard-restore-source-lease-projection"
+target_row_id = "a16:logical-kind:shard-restore-source-lease-projection"
+slice_id = "a16"
+source_key = "top|ShardRestoreSourceLeaseProjection"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-shard-time-authority-retirement-floor"
+target_row_id = "a16:logical-kind:shard-time-authority-retirement-floor"
+slice_id = "a16"
+source_key = "top|ShardTimeAuthorityRetirementFloor"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-shard-time-authority-retirement-ack"
+target_row_id = "a16:logical-kind:shard-time-authority-retirement-ack"
+slice_id = "a16"
+source_key = "top|ShardTimeAuthorityRetirementAck"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-drain-hold"
+target_row_id = "a16:logical-kind:time-authority-drain-hold"
+slice_id = "a16"
+source_key = "top|TimeAuthorityDrainHold<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-continuity-authority-observation-import"
+target_row_id = "a16:logical-kind:continuity-authority-observation-import"
+slice_id = "a16"
+source_key = "top|ContinuityAuthorityObservationImport<Role>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-epoch-transition-record"
+target_row_id = "a16:logical-kind:time-authority-epoch-transition-record"
+slice_id = "a16"
+source_key = "top|TimeAuthorityEpochTransitionRecord<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-bound-subject-retirement-proof"
+target_row_id = "a16:logical-kind:time-bound-subject-retirement-proof"
+slice_id = "a16"
+source_key = "top|TimeBoundSubjectRetirementProof<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-verifier-key-retirement-floor"
+target_row_id = "a16:logical-kind:verifier-key-retirement-floor"
+slice_id = "a16"
+source_key = "top|VerifierKeyRetirementFloor"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-time-authority-transition-terminal-summary"
+target_row_id = "a16:logical-kind:time-authority-transition-terminal-summary"
+slice_id = "a16"
+source_key = "top|TimeAuthorityTransitionTerminalSummary<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
 definition_status = "declared"
 
 [[source_symbol_disposition]]
