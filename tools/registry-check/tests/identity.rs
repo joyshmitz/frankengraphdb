@@ -173,7 +173,7 @@ schema_version = 1
 
 [registry]
 name = "durable_fields"
-registry_epoch = 11
+registry_epoch = 12
 
 [[union]]
 union_name = "FixtureTopLevelUnion"
@@ -215,7 +215,7 @@ max_size_bytes = 127
     let (epoch, fields, ordinary_unions, reference_unions) =
         identity::fields_from(&table).expect("ordinary-union fixture models");
 
-    assert_eq!(epoch, 11);
+    assert_eq!(epoch, 12);
     assert!(fields.is_empty());
     assert!(reference_unions.is_empty());
     assert_eq!(ordinary_unions.len(), 1);
@@ -2632,6 +2632,11 @@ fn idr_generic_signed_role_unions_resolve_through_their_family_rows() {
     for signed in [
         "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>",
         "RoleTimeIssuanceReservationClosure<Role>",
+        "TimeSubjectDisposition<Role>",
+        "RoleConfigurationRetentionBasis<Role:AuthorityOwningRole>",
+        "RoleTimeAuthorityDrainFloorSet<Role>",
+        "RoleTimeAuthorityRetirementFloorSet<Role>",
+        "ContinuityAuthorityCurrentBasis<Role>",
     ] {
         let union = identity
             .ordinary_unions
@@ -3104,10 +3109,20 @@ fn idr_assignment_history_and_epoch_are_frozen() {
                 | "TimeAuthorityObservationImport"
                 | "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
                 | "RoleTimeIssuanceReservationClosure<Role>"
+                | "TimeSubjectDisposition<Role>"
+                | "TimeSubjectTerminalProjection"
+                | "RoleConfigurationRetentionBasis<Role:AuthorityOwningRole>"
+                | "RoleTimeAuthorityDrainFloorSet<Role>"
+                | "RoleTimeAuthorityRetirementFloorSet<Role>"
+                | "ContinuityAuthorityCurrentBasis<Role>"
+                | "ShardRestoreSourceLeaseProjectionSource"
+                | "RestoreClaimedTargetAuthorityRecipe"
+                | "RestoreIdentityKeyPlan"
+                | "RestoreIdentityKeyDispositionEvidence"
         )
     });
     assert_eq!(
-        pre_erratum.ordinary_unions.len() + 8,
+        pre_erratum.ordinary_unions.len() + 18,
         current_union_count,
         "the historical witness must remove exactly the post-erratum A15, A01, and A16 unions"
     );

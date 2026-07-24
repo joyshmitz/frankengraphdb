@@ -139,9 +139,9 @@ else
 fi
 if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
     '"event":"appendix_target_manifest"' \
-    '"target_count":382' \
+    '"target_count":425' \
     '"projection_fallback_count":83' \
-    '"target_source_assignment_sha256":"935c4ff5541fd7af4285b5641c2eb82e412704e453ecb371d2b4fe2b37bc1821"' \
+    '"target_source_assignment_sha256":"0f396a00c79383cd79621111d117db5654232f550485fa473dc1cb9cda9806c0"' \
     '"outcome":"pass"'; then
   ok "Appendix A target/source assignments are release-pinned"
 else
@@ -170,7 +170,7 @@ if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
     '"reserved_reservations":769' \
     '"source_dispositions":848' \
     '"top_level_candidates":1229' \
-    '"targets":382' \
+    '"targets":425' \
     '"semantic_bindings":0' \
     '"evidence_rows":0' \
     '"reference_only_symbols":343' \
@@ -186,12 +186,12 @@ fi
 if jsonl_line_has_all "$WORK/appendix-baseline.jsonl" \
     '"event":"appendix_completed"' \
     '"slices":21' \
-    '"projection_rows":382' \
+    '"projection_rows":425' \
     '"projection_files":6' \
     '"reservations":813' \
     '"source_dispositions":848' \
     '"top_level_candidates":1229' \
-    '"targets":382' \
+    '"targets":425' \
     '"semantic_bindings":0' \
     '"evidence_rows":0' \
     '"reference_only_symbols":343' \
@@ -634,8 +634,8 @@ fi
 log "phase 2h: registry epoch drift without a reviewed assignment change"
 stage_except neg-registry-epoch logical_object_kinds.toml
 awk '
-  !changed && $0 == "registry_epoch = 4" {
-    print "registry_epoch = 5"
+  !changed && $0 == "registry_epoch = 5" {
+    print "registry_epoch = 6"
     changed = 1
     next
   }

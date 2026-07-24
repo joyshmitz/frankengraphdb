@@ -6,7 +6,7 @@ schema_version = 1
 
 [registry]
 name = "logical_object_kinds"
-registry_epoch = 4
+registry_epoch = 5
 
 [[kind]]
 object_kind = 0x0001
@@ -520,3 +520,93 @@ construction_order = 25
 role_predicate = "true"
 max_size_bytes = 16777216
 golden_corpus = "corpus/logical/time_validation_evidence/"
+
+[[kind]]
+object_kind = 0x051e
+name = "TimeSubjectDisposition"
+status = "reserved"
+construction_order = 70
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_subject_disposition/"
+
+[[kind]]
+object_kind = 0x051f
+name = "TimeSubjectTerminalProjection"
+status = "reserved"
+construction_order = 71
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/time_subject_terminal_projection/"
+
+[[kind]]
+object_kind = 0x0520
+name = "RoleConfigurationRetentionBasis"
+status = "reserved"
+construction_order = 72
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/role_configuration_retention_basis/"
+
+[[kind]]
+object_kind = 0x0521
+name = "RoleTimeAuthorityDrainFloorSet"
+status = "reserved"
+construction_order = 73
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/role_time_authority_drain_floor_set/"
+
+[[kind]]
+object_kind = 0x0522
+name = "RoleTimeAuthorityRetirementFloorSet"
+status = "reserved"
+construction_order = 74
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/role_time_authority_retirement_floor_set/"
+
+[[kind]]
+object_kind = 0x0523
+name = "ContinuityAuthorityCurrentBasis"
+status = "reserved"
+construction_order = 75
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/continuity_authority_current_basis/"
+
+[[kind]]
+object_kind = 0x0524
+name = "ShardRestoreSourceLeaseProjectionSource"
+status = "reserved"
+construction_order = 76
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/shard_restore_source_lease_projection_source/"
+
+[[kind]]
+object_kind = 0x0525
+name = "RestoreClaimedTargetAuthorityRecipe"
+status = "reserved"
+construction_order = 77
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/restore_claimed_target_authority_recipe/"
+
+[[kind]]
+object_kind = 0x0526
+name = "RestoreIdentityKeyPlan"
+status = "reserved"
+construction_order = 78
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/restore_identity_key_plan/"
+
+[[kind]]
+object_kind = 0x0527
+name = "RestoreIdentityKeyDispositionEvidence"
+status = "reserved"
+construction_order = 79
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/restore_identity_key_disposition_evidence/"
