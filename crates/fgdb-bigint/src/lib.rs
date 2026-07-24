@@ -68,6 +68,7 @@ pub enum ArithmeticOperation {
     Add,
     Subtract,
     Multiply,
+    Divide,
 }
 
 impl fmt::Display for ArithmeticOperation {
@@ -78,6 +79,7 @@ impl fmt::Display for ArithmeticOperation {
             Self::Add => f.write_str("add"),
             Self::Subtract => f.write_str("subtract"),
             Self::Multiply => f.write_str("multiply"),
+            Self::Divide => f.write_str("divide"),
         }
     }
 }
@@ -85,6 +87,7 @@ impl fmt::Display for ArithmeticOperation {
 /// Stable failure surface for bounded arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithmeticError {
+    DivisionByZero,
     LimbLimitExceeded {
         operation: ArithmeticOperation,
         required_limbs: usize,
@@ -102,6 +105,7 @@ pub enum ArithmeticError {
 impl fmt::Display for ArithmeticError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
+            Self::DivisionByZero => f.write_str("cannot divide by zero"),
             Self::LimbLimitExceeded {
                 operation,
                 required_limbs,
@@ -258,6 +262,23 @@ impl BigInt {
         limit: LimbLimit,
     ) -> Result<Vec<u64>, ArithmeticError> {
         limit.ensure(operation, required_limbs)?;
+        if required_limbs > (isize::MAX as usize) / std::mem::size_of::<u64>() {
+            return Err(ArithmeticError::CapacityOverflow { operation });
+        }
+        let mut limbs = Vec::new();
+        limbs
+            .try_reserve_exact(required_limbs)
+            .map_err(|_| ArithmeticError::AllocationFailed {
+                operation,
+                requested_limbs: required_limbs,
+            })?;
+        Ok(limbs)
+    }
+
+    fn allocate_workspace_limbs(
+        operation: ArithmeticOperation,
+        required_limbs: usize,
+    ) -> Result<Vec<u64>, ArithmeticError> {
         if required_limbs > (isize::MAX as usize) / std::mem::size_of::<u64>() {
             return Err(ArithmeticError::CapacityOverflow { operation });
         }
@@ -562,6 +583,220 @@ impl BigInt {
         Ok(out)
     }
 
+    fn quotient_limb_count(dividend: &[u64], divisor: &[u64]) -> Result<usize, ArithmeticError> {
+        debug_assert!(!divisor.is_empty());
+        debug_assert!(Self::cmp_magnitude(dividend, divisor) != Ordering::Less);
+        let limb_offset = dividend.len() - divisor.len();
+        if Self::cmp_magnitude(&dividend[limb_offset..], divisor) == Ordering::Less {
+            Ok(limb_offset)
+        } else {
+            limb_offset
+                .checked_add(1)
+                .ok_or(ArithmeticError::CapacityOverflow {
+                    operation: ArithmeticOperation::Divide,
+                })
+        }
+    }
+
+    fn div_rem_magnitude_by_limb(
+        dividend: &[u64],
+        divisor: u64,
+        quotient_limbs: usize,
+        limit: LimbLimit,
+    ) -> Result<(Vec<u64>, Vec<u64>), ArithmeticError> {
+        debug_assert_ne!(divisor, 0);
+        limit.ensure(ArithmeticOperation::Divide, quotient_limbs)?;
+        let mut quotient =
+            Self::allocate_limbs(ArithmeticOperation::Divide, quotient_limbs, limit)?;
+        quotient.resize(quotient_limbs, 0);
+
+        let mut remainder = 0u128;
+        for (index, &limb) in dividend.iter().enumerate().rev() {
+            let partial = (remainder << 64) | u128::from(limb);
+            let quotient_limb = partial / u128::from(divisor);
+            remainder = partial % u128::from(divisor);
+            if index < quotient_limbs {
+                quotient[index] = quotient_limb as u64;
+            } else {
+                debug_assert_eq!(quotient_limb, 0);
+            }
+        }
+
+        let remainder_limbs = usize::from(remainder != 0);
+        limit.ensure(ArithmeticOperation::Divide, remainder_limbs)?;
+        let mut remainder_out =
+            Self::allocate_limbs(ArithmeticOperation::Divide, remainder_limbs, limit)?;
+        if remainder != 0 {
+            remainder_out.push(remainder as u64);
+        }
+        debug_assert_ne!(quotient.last(), Some(&0));
+        Ok((quotient, remainder_out))
+    }
+
+    fn normalized_division_operand(
+        magnitude: &[u64],
+        shift: u32,
+        extra_high_limb: bool,
+    ) -> Result<Vec<u64>, ArithmeticError> {
+        let required_limbs = magnitude
+            .len()
+            .checked_add(usize::from(extra_high_limb))
+            .ok_or(ArithmeticError::CapacityOverflow {
+                operation: ArithmeticOperation::Divide,
+            })?;
+        let mut normalized =
+            Self::allocate_workspace_limbs(ArithmeticOperation::Divide, required_limbs)?;
+        if shift == 0 {
+            normalized.extend_from_slice(magnitude);
+            if extra_high_limb {
+                normalized.push(0);
+            }
+            return Ok(normalized);
+        }
+
+        let mut carry = 0u64;
+        for &limb in magnitude {
+            normalized.push((limb << shift) | carry);
+            carry = limb >> (64 - shift);
+        }
+        if extra_high_limb {
+            normalized.push(carry);
+        } else {
+            debug_assert_eq!(carry, 0);
+        }
+        Ok(normalized)
+    }
+
+    fn subtract_divisor_product(
+        normalized_dividend: &mut [u64],
+        offset: usize,
+        normalized_divisor: &[u64],
+        quotient_limb: u64,
+    ) -> bool {
+        let mut product_carry = 0u128;
+        let mut borrow = 0u64;
+        for (index, &divisor_limb) in normalized_divisor.iter().enumerate() {
+            let product = u128::from(quotient_limb) * u128::from(divisor_limb) + product_carry;
+            product_carry = product >> 64;
+            let (difference, first_borrow) =
+                normalized_dividend[offset + index].overflowing_sub(product as u64);
+            let (difference, second_borrow) = difference.overflowing_sub(borrow);
+            normalized_dividend[offset + index] = difference;
+            borrow = u64::from(first_borrow || second_borrow);
+        }
+
+        let high_index = offset + normalized_divisor.len();
+        let high_subtrahend = product_carry + u128::from(borrow);
+        let high_limb = u128::from(normalized_dividend[high_index]);
+        if high_limb >= high_subtrahend {
+            normalized_dividend[high_index] = (high_limb - high_subtrahend) as u64;
+            false
+        } else {
+            normalized_dividend[high_index] = ((1u128 << 64) + high_limb - high_subtrahend) as u64;
+            true
+        }
+    }
+
+    fn add_divisor_back(
+        normalized_dividend: &mut [u64],
+        offset: usize,
+        normalized_divisor: &[u64],
+    ) {
+        let mut carry = 0u128;
+        for (index, &divisor_limb) in normalized_divisor.iter().enumerate() {
+            let sum =
+                u128::from(normalized_dividend[offset + index]) + u128::from(divisor_limb) + carry;
+            normalized_dividend[offset + index] = sum as u64;
+            carry = sum >> 64;
+        }
+        let high_index = offset + normalized_divisor.len();
+        normalized_dividend[high_index] =
+            normalized_dividend[high_index].wrapping_add(carry as u64);
+    }
+
+    fn div_rem_magnitude_knuth(
+        dividend: &[u64],
+        divisor: &[u64],
+        quotient_limbs: usize,
+        limit: LimbLimit,
+    ) -> Result<(Vec<u64>, Vec<u64>), ArithmeticError> {
+        debug_assert!(divisor.len() >= 2);
+        debug_assert!(Self::cmp_magnitude(dividend, divisor) == Ordering::Greater);
+        debug_assert!(quotient_limbs > 0);
+
+        limit.ensure(ArithmeticOperation::Divide, quotient_limbs)?;
+        let mut quotient =
+            Self::allocate_limbs(ArithmeticOperation::Divide, quotient_limbs, limit)?;
+        quotient.resize(quotient_limbs, 0);
+
+        let Some(&divisor_most_significant) = divisor.last() else {
+            return Err(ArithmeticError::DivisionByZero);
+        };
+        let shift = divisor_most_significant.leading_zeros();
+        let normalized_divisor = Self::normalized_division_operand(divisor, shift, false)?;
+        let mut normalized_dividend = Self::normalized_division_operand(dividend, shift, true)?;
+        let divisor_high = u128::from(normalized_divisor[divisor.len() - 1]);
+        let divisor_next = u128::from(normalized_divisor[divisor.len() - 2]);
+        let base = 1u128 << 64;
+
+        for offset in (0..quotient_limbs).rev() {
+            let high_index = offset + divisor.len();
+            let trial_numerator = (u128::from(normalized_dividend[high_index]) << 64)
+                | u128::from(normalized_dividend[high_index - 1]);
+            let mut trial_quotient = trial_numerator / divisor_high;
+            let mut trial_remainder = trial_numerator % divisor_high;
+            while trial_quotient == base
+                || trial_quotient * divisor_next
+                    > base * trial_remainder + u128::from(normalized_dividend[high_index - 2])
+            {
+                trial_quotient -= 1;
+                trial_remainder += divisor_high;
+                if trial_remainder >= base {
+                    break;
+                }
+            }
+            debug_assert!(trial_quotient < base);
+
+            let mut quotient_limb = trial_quotient as u64;
+            if Self::subtract_divisor_product(
+                &mut normalized_dividend,
+                offset,
+                &normalized_divisor,
+                quotient_limb,
+            ) {
+                debug_assert_ne!(quotient_limb, 0);
+                quotient_limb = quotient_limb.wrapping_sub(1);
+                Self::add_divisor_back(&mut normalized_dividend, offset, &normalized_divisor);
+            }
+            quotient[offset] = quotient_limb;
+        }
+
+        if shift != 0 {
+            let mut carry = 0u64;
+            for index in (0..divisor.len()).rev() {
+                let limb = normalized_dividend[index];
+                normalized_dividend[index] = (limb >> shift) | carry;
+                carry = limb << (64 - shift);
+            }
+            debug_assert_eq!(carry, 0);
+        }
+        let remainder_limbs = normalized_dividend[..divisor.len()]
+            .iter()
+            .rposition(|&limb| limb != 0)
+            .map_or(0, |index| index + 1);
+        limit.ensure(ArithmeticOperation::Divide, remainder_limbs)?;
+        let mut remainder =
+            Self::allocate_limbs(ArithmeticOperation::Divide, remainder_limbs, limit)?;
+        remainder.extend_from_slice(&normalized_dividend[..remainder_limbs]);
+
+        debug_assert_ne!(quotient.last(), Some(&0));
+        debug_assert!(
+            Self::cmp_magnitude(&remainder, divisor) == Ordering::Less,
+            "division remainder must be smaller than the divisor"
+        );
+        Ok((quotient, remainder))
+    }
+
     pub fn checked_neg(&self, limit: LimbLimit) -> Result<Self, ArithmeticError> {
         let mut limbs = Self::allocate_limbs(ArithmeticOperation::Negate, self.limbs.len(), limit)?;
         limbs.extend_from_slice(&self.limbs);
@@ -632,6 +867,65 @@ impl BigInt {
         Ok(Self::from_sign_magnitude(
             self.negative != other.negative,
             Self::mul_magnitude(&self.limbs, &other.limbs, limit)?,
+        ))
+    }
+
+    /// Divides `self` by `divisor`, returning `(quotient, remainder)`.
+    ///
+    /// Signed division truncates toward zero, matching Rust integer `/` and
+    /// `%`: a nonzero quotient is negative exactly when the operands have
+    /// different signs, while a nonzero remainder has the dividend's sign.
+    /// The result is exact:
+    ///
+    /// `self == quotient * divisor + remainder`
+    ///
+    /// and `abs(remainder) < abs(divisor)`. Both returned magnitudes must fit
+    /// `limit`; a zero divisor is rejected before any resource admission.
+    /// Multi-limb division uses normalized base-2^64 long division with
+    /// quotient-digit correction, never value-proportional repeated
+    /// subtraction.
+    pub fn checked_div_rem(
+        &self,
+        divisor: &Self,
+        limit: LimbLimit,
+    ) -> Result<(Self, Self), ArithmeticError> {
+        if divisor.is_zero() {
+            return Err(ArithmeticError::DivisionByZero);
+        }
+        if self.is_zero() {
+            return Ok((Self::zero(), Self::zero()));
+        }
+
+        let magnitude_order = Self::cmp_magnitude(&self.limbs, &divisor.limbs);
+        if magnitude_order == Ordering::Less {
+            limit.ensure(ArithmeticOperation::Divide, self.limbs.len())?;
+            let mut remainder =
+                Self::allocate_limbs(ArithmeticOperation::Divide, self.limbs.len(), limit)?;
+            remainder.extend_from_slice(&self.limbs);
+            return Ok((
+                Self::zero(),
+                Self::from_sign_magnitude(self.negative, remainder),
+            ));
+        }
+        if magnitude_order == Ordering::Equal {
+            limit.ensure(ArithmeticOperation::Divide, 1)?;
+            let mut quotient = Self::allocate_limbs(ArithmeticOperation::Divide, 1, limit)?;
+            quotient.push(1);
+            return Ok((
+                Self::from_sign_magnitude(self.negative != divisor.negative, quotient),
+                Self::zero(),
+            ));
+        }
+
+        let quotient_limbs = Self::quotient_limb_count(&self.limbs, &divisor.limbs)?;
+        let (quotient, remainder) = if divisor.limbs.len() == 1 {
+            Self::div_rem_magnitude_by_limb(&self.limbs, divisor.limbs[0], quotient_limbs, limit)?
+        } else {
+            Self::div_rem_magnitude_knuth(&self.limbs, &divisor.limbs, quotient_limbs, limit)?
+        };
+        Ok((
+            Self::from_sign_magnitude(self.negative != divisor.negative, quotient),
+            Self::from_sign_magnitude(self.negative, remainder),
         ))
     }
 }
@@ -925,6 +1219,407 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn assert_division_identity(
+        dividend: &BigInt,
+        divisor: &BigInt,
+        quotient: &BigInt,
+        remainder: &BigInt,
+    ) {
+        let product = quotient
+            .checked_mul(divisor, TEST_LIMIT)
+            .expect("division identity product fits the test budget");
+        let reconstructed = product
+            .checked_add(remainder, TEST_LIMIT)
+            .expect("division identity sum fits the test budget");
+        assert_eq!(&reconstructed, dividend);
+        assert!(
+            BigInt::cmp_magnitude(&remainder.limbs, &divisor.limbs) == Ordering::Less,
+            "remainder {remainder:?} must be smaller in magnitude than divisor {divisor:?}"
+        );
+        assert!(quotient.is_canonical() && remainder.is_canonical());
+        if !quotient.is_zero() {
+            assert_eq!(
+                quotient.is_negative(),
+                dividend.is_negative() != divisor.is_negative()
+            );
+        }
+        if !remainder.is_zero() {
+            assert_eq!(remainder.is_negative(), dividend.is_negative());
+        }
+    }
+
+    #[test]
+    fn exhaustive_small_signed_domain_matches_i128_division() {
+        for dividend in i8::MIN..=i8::MAX {
+            for divisor in i8::MIN..=i8::MAX {
+                if divisor == 0 {
+                    continue;
+                }
+                let dividend_i128 = i128::from(dividend);
+                let divisor_i128 = i128::from(divisor);
+                let dividend_big = BigInt::from_i128(dividend_i128);
+                let divisor_big = BigInt::from_i128(divisor_i128);
+                let (quotient, remainder) = dividend_big
+                    .checked_div_rem(&divisor_big, LimbLimit::new(1))
+                    .expect("i8 quotient and remainder occupy at most one limb");
+                assert_eq!(
+                    quotient.to_i128(),
+                    Some(dividend_i128 / divisor_i128),
+                    "quotient mismatch for {dividend_i128} / {divisor_i128}"
+                );
+                assert_eq!(
+                    remainder.to_i128(),
+                    Some(dividend_i128 % divisor_i128),
+                    "remainder mismatch for {dividend_i128} % {divisor_i128}"
+                );
+                assert_division_identity(&dividend_big, &divisor_big, &quotient, &remainder);
+            }
+        }
+    }
+
+    #[test]
+    fn i128_boundary_matrix_matches_checked_native_division() {
+        let values = [
+            i128::MIN,
+            i128::MIN + 1,
+            -(1i128 << 126),
+            -(1i128 << 65),
+            -((1i128 << 64) + 1),
+            -(1i128 << 64),
+            -(u64::MAX as i128),
+            -3,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            3,
+            u64::MAX as i128,
+            1i128 << 64,
+            (1i128 << 64) + 1,
+            1i128 << 65,
+            1i128 << 126,
+            i128::MAX - 1,
+            i128::MAX,
+        ];
+        for &dividend in &values {
+            for &divisor in &values {
+                let dividend_big = BigInt::from_i128(dividend);
+                let divisor_big = BigInt::from_i128(divisor);
+                if divisor == 0 {
+                    assert_eq!(
+                        dividend_big.checked_div_rem(&divisor_big, LimbLimit::new(2)),
+                        Err(ArithmeticError::DivisionByZero)
+                    );
+                    continue;
+                }
+                let (quotient, remainder) = dividend_big
+                    .checked_div_rem(&divisor_big, LimbLimit::new(3))
+                    .expect("i128 division needs at most three result limbs");
+                if let Some(expected) = dividend.checked_div(divisor) {
+                    assert_eq!(
+                        quotient.to_i128(),
+                        Some(expected),
+                        "quotient mismatch for {dividend} / {divisor}"
+                    );
+                } else {
+                    assert_eq!((dividend, divisor), (i128::MIN, -1));
+                    assert_eq!(quotient.sign(), Sign::Positive);
+                    assert_eq!(quotient.magnitude_limbs_le(), &[0, 1u64 << 63]);
+                }
+                if let Some(expected) = dividend.checked_rem(divisor) {
+                    assert_eq!(
+                        remainder.to_i128(),
+                        Some(expected),
+                        "remainder mismatch for {dividend} % {divisor}"
+                    );
+                } else {
+                    assert_eq!((dividend, divisor), (i128::MIN, -1));
+                    assert_eq!(remainder, BigInt::zero());
+                }
+                assert_division_identity(&dividend_big, &divisor_big, &quotient, &remainder);
+            }
+        }
+    }
+
+    #[test]
+    fn u128_boundary_matrix_matches_native_division() {
+        let values = [
+            0,
+            1,
+            2,
+            u128::from(u64::MAX - 1),
+            u128::from(u64::MAX),
+            1u128 << 64,
+            (1u128 << 64) + 1,
+            (1u128 << 127) - 1,
+            1u128 << 127,
+            (1u128 << 127) + 1,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        for &dividend in &values {
+            for &divisor in &values {
+                let dividend_big = BigInt::from_u128(dividend);
+                let divisor_big = BigInt::from_u128(divisor);
+                if divisor == 0 {
+                    assert_eq!(
+                        dividend_big.checked_div_rem(&divisor_big, LimbLimit::new(2)),
+                        Err(ArithmeticError::DivisionByZero)
+                    );
+                    continue;
+                }
+                let (quotient, remainder) = dividend_big
+                    .checked_div_rem(&divisor_big, LimbLimit::new(2))
+                    .expect("u128 quotient and remainder occupy at most two limbs");
+                assert_eq!(
+                    quotient,
+                    BigInt::from_u128(dividend / divisor),
+                    "quotient mismatch for {dividend} / {divisor}"
+                );
+                assert_eq!(
+                    remainder,
+                    BigInt::from_u128(dividend % divisor),
+                    "remainder mismatch for {dividend} % {divisor}"
+                );
+                assert_division_identity(&dividend_big, &divisor_big, &quotient, &remainder);
+            }
+        }
+    }
+
+    #[test]
+    fn knuth_trial_correction_and_add_back_vectors_are_exact() {
+        let cases = [
+            // The first estimate is base + 1. The two-digit guard must reduce
+            // it twice rather than letting the narrowing cast wrap the digit.
+            (
+                vec![0, 1u64 << 63, 1u64 << 63],
+                vec![(1u64 << 63) + 1, 1u64 << 63],
+                vec![u64::MAX],
+                vec![(1u64 << 63) + 1, (1u64 << 63) - 1],
+            ),
+            // An interior trial digit requires both permitted correction
+            // steps before subtraction.
+            (
+                vec![
+                    17_949_602_623_054_607_959,
+                    11_154_557_356_834_803_885,
+                    10_514_998_908_788_136_365,
+                    13_046_051_152_631_070_964,
+                    6_310_274_242_980_859_722,
+                    2_726_540_312_051_596_134,
+                    12_447_584_222_245_729_637,
+                ],
+                vec![
+                    10_976_685_742_615_999_155,
+                    18_410_391_486_344_873_006,
+                    11_574_686_656_902_173_857,
+                ],
+                vec![
+                    15_537_162_608_830_708_470,
+                    15_417_723_965_371_022_023,
+                    11_443_288_293_163_043_518,
+                    1_391_149_364_795_528_082,
+                    1,
+                ],
+                vec![
+                    8_388_440_447_448_084_565,
+                    6_457_466_909_459_772_174,
+                    676_628_760_763_417_625,
+                ],
+            ),
+            // The two-high-limb estimate passes the guard by one but the full
+            // product is too large, exercising subtract-underflow + add-back.
+            (
+                vec![0, 0, 0, 1],
+                vec![1, 0, 1u64 << 63],
+                vec![1],
+                vec![u64::MAX, u64::MAX, (1u64 << 63) - 1],
+            ),
+        ];
+
+        for (dividend, divisor, expected_quotient, expected_remainder) in cases {
+            let dividend = BigInt::from_sign_magnitude(false, dividend);
+            let divisor = BigInt::from_sign_magnitude(false, divisor);
+            let (quotient, remainder) = dividend
+                .checked_div_rem(&divisor, TEST_LIMIT)
+                .expect("correction vector fits the test budget");
+            assert_eq!(
+                quotient,
+                BigInt::from_sign_magnitude(false, expected_quotient)
+            );
+            assert_eq!(
+                remainder,
+                BigInt::from_sign_magnitude(false, expected_remainder)
+            );
+            assert_division_identity(&dividend, &divisor, &quotient, &remainder);
+        }
+    }
+
+    #[test]
+    fn multi_limb_division_recovers_adversarial_quotients_and_remainders() {
+        let cases = [
+            (
+                BigInt::from_sign_magnitude(false, vec![u64::MAX, u64::MAX, 1]),
+                BigInt::from_sign_magnitude(false, vec![u64::MAX, 1]),
+                BigInt::from_sign_magnitude(false, vec![u64::MAX - 1, 1]),
+            ),
+            (
+                BigInt::from_sign_magnitude(false, vec![0, u64::MAX, u64::MAX]),
+                BigInt::from_sign_magnitude(false, vec![u64::MAX, u64::MAX]),
+                BigInt::from_u64(1),
+            ),
+            (
+                BigInt::from_sign_magnitude(false, vec![u64::MAX, 0, 1]),
+                BigInt::from_sign_magnitude(false, vec![0, 1]),
+                BigInt::from_sign_magnitude(false, vec![u64::MAX, 0]),
+            ),
+            (
+                BigInt::from_sign_magnitude(false, vec![1, 0, 0, 1]),
+                BigInt::from_sign_magnitude(false, vec![u64::MAX - 1, 2]),
+                BigInt::from_sign_magnitude(false, vec![u64::MAX - 2, 2]),
+            ),
+        ];
+
+        for (quotient, divisor, remainder) in cases {
+            assert!(BigInt::cmp_magnitude(&remainder.limbs, &divisor.limbs) == Ordering::Less);
+            let product = quotient
+                .checked_mul(&divisor, TEST_LIMIT)
+                .expect("constructed dividend product");
+            let dividend = product
+                .checked_add(&remainder, TEST_LIMIT)
+                .expect("constructed dividend remainder");
+            for (dividend_negative, divisor_negative) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let signed_dividend =
+                    BigInt::from_sign_magnitude(dividend_negative, dividend.limbs.clone());
+                let signed_divisor =
+                    BigInt::from_sign_magnitude(divisor_negative, divisor.limbs.clone());
+                let (actual_quotient, actual_remainder) = signed_dividend
+                    .checked_div_rem(&signed_divisor, TEST_LIMIT)
+                    .expect("constructed division fits the test budget");
+                assert_eq!(
+                    actual_quotient,
+                    BigInt::from_sign_magnitude(
+                        dividend_negative != divisor_negative,
+                        quotient.limbs.clone(),
+                    )
+                );
+                assert_eq!(
+                    actual_remainder,
+                    BigInt::from_sign_magnitude(dividend_negative, remainder.limbs.clone())
+                );
+                assert_division_identity(
+                    &signed_dividend,
+                    &signed_divisor,
+                    &actual_quotient,
+                    &actual_remainder,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn randomized_multi_limb_division_preserves_identity_and_bounds() {
+        for seed in [0u64, 0xD1A1_DED0, u64::MAX] {
+            let mut rng = SplitMix64(seed);
+            for _ in 0..300 {
+                let dividend = rng.bigint(6);
+                let mut divisor = rng.bigint(4);
+                if divisor.is_zero() {
+                    divisor = BigInt::from_u64(1);
+                }
+                let (quotient, remainder) = dividend
+                    .checked_div_rem(&divisor, TEST_LIMIT)
+                    .expect("six-limb division fits the test budget");
+                assert_division_identity(&dividend, &divisor, &quotient, &remainder);
+            }
+        }
+    }
+
+    #[test]
+    fn division_enforces_exact_limits_and_error_precedence() {
+        let zero = BigInt::zero();
+        let one = BigInt::from_u64(1);
+        let three_limb = BigInt::from_sign_magnitude(false, vec![0, 0, 1]);
+        assert_eq!(
+            three_limb.checked_div_rem(&zero, LimbLimit::new(0)),
+            Err(ArithmeticError::DivisionByZero),
+            "division by zero precedes every resource check"
+        );
+        assert_eq!(
+            zero.checked_div_rem(&one, LimbLimit::new(0)),
+            Ok((BigInt::zero(), BigInt::zero()))
+        );
+
+        assert_eq!(
+            three_limb.checked_div_rem(&one, LimbLimit::new(2)),
+            Err(ArithmeticError::LimbLimitExceeded {
+                operation: ArithmeticOperation::Divide,
+                required_limbs: 3,
+                limit: 2,
+            }),
+            "quotient admission reports its exact normalized size"
+        );
+
+        let two_limb_remainder = BigInt::from_sign_magnitude(false, vec![u64::MAX, 1]);
+        let divisor = BigInt::from_sign_magnitude(false, vec![0, 2]);
+        let dividend = divisor
+            .checked_add(&two_limb_remainder, TEST_LIMIT)
+            .expect("one times divisor plus a two-limb remainder");
+        assert_eq!(
+            dividend.checked_div_rem(&divisor, LimbLimit::new(1)),
+            Err(ArithmeticError::LimbLimitExceeded {
+                operation: ArithmeticOperation::Divide,
+                required_limbs: 2,
+                limit: 1,
+            }),
+            "remainder admission reports its exact normalized size after quotient fits"
+        );
+        assert_eq!(
+            one.checked_div_rem(&divisor, LimbLimit::new(0)),
+            Err(ArithmeticError::LimbLimitExceeded {
+                operation: ArithmeticOperation::Divide,
+                required_limbs: 1,
+                limit: 0,
+            }),
+            "a smaller dividend is the exact remainder"
+        );
+        assert_eq!(
+            divisor
+                .checked_div_rem(&divisor, LimbLimit::new(1))
+                .expect("equal magnitudes need one quotient limb"),
+            (BigInt::from_u64(1), BigInt::zero())
+        );
+    }
+
+    #[test]
+    fn division_workspace_capacity_and_allocation_failures_are_typed() {
+        let first_impossible_limb_count = (isize::MAX as usize) / std::mem::size_of::<u64>() + 1;
+        assert_eq!(
+            BigInt::allocate_workspace_limbs(
+                ArithmeticOperation::Divide,
+                first_impossible_limb_count,
+            ),
+            Err(ArithmeticError::CapacityOverflow {
+                operation: ArithmeticOperation::Divide,
+            })
+        );
+
+        let largest_addressable_limb_count = (isize::MAX as usize) / std::mem::size_of::<u64>();
+        assert_eq!(
+            BigInt::allocate_workspace_limbs(
+                ArithmeticOperation::Divide,
+                largest_addressable_limb_count,
+            ),
+            Err(ArithmeticError::AllocationFailed {
+                operation: ArithmeticOperation::Divide,
+                requested_limbs: largest_addressable_limb_count,
+            })
+        );
     }
 
     #[test]
