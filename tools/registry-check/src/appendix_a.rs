@@ -38,12 +38,12 @@ pub const APPENDIX_SHA256: &str =
     "71a48b67304f94568590f79c5b1c1ee4731819aee022c57fece78a7e72bce7f1";
 pub const APPENDIX_HEADING: &str = "## Appendix A — On-Disk Object Formats (normative contract)";
 pub const NEXT_HEADING: &str = "## Appendix B — Graph Intent Log (the semantic vocabulary)";
-pub const EXPECTED_PROJECTION_ROW_COUNT: usize = 366;
+pub const EXPECTED_PROJECTION_ROW_COUNT: usize = 382;
 pub const EXPECTED_PROJECTION_ROW_IDS_SHA256: &str =
-    "56136ead0e4454475d056b376383f5ad3860339ac0e67f4866148c0796656c01";
+    "928851420c4e45802db72143738c868f037786cadce37a43359bddacf931358f";
 pub const EXPECTED_PROJECTION_FALLBACK_COUNT: usize = 83;
 pub const EXPECTED_TARGET_SOURCE_ASSIGNMENT_SHA256: &str =
-    "fe41bce715356466560b10148bcfb7fedbba43d1100835808bb8983abead690c";
+    "935c4ff5541fd7af4285b5641c2eb82e412704e453ecb371d2b4fe2b37bc1821";
 pub const EXPECTED_ANNOTATION_COUNT: usize = 0;
 pub const EXPECTED_ANNOTATION_SHA256: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -60,11 +60,11 @@ pub const EXPECTED_AMBIGUITY_ADJUDICATION_COUNT: usize = 176;
 pub const EXPECTED_AMBIGUITY_ADJUDICATION_SHA256: &str =
     "5c85988801f963fc8b38dfca7dc796bde19f995f8ddb4e208e2a8f581338fbbc";
 pub const EXPECTED_TYPE_RESERVATION_COUNT: usize = 813;
-pub const EXPECTED_EXISTING_TYPE_RESERVATION_COUNT: usize = 41;
-pub const EXPECTED_RESERVED_TYPE_RESERVATION_COUNT: usize = 772;
+pub const EXPECTED_EXISTING_TYPE_RESERVATION_COUNT: usize = 44;
+pub const EXPECTED_RESERVED_TYPE_RESERVATION_COUNT: usize = 769;
 pub const EXPECTED_RESERVATION_HIGH_WATER: u16 = 0x051d;
 pub const EXPECTED_RESERVATION_ASSIGNMENT_SHA256: &str =
-    "c6e933c30cc080b88a68eb903f8d331d29ff6d64b376d42a764d659d51dc224d";
+    "9fe4f078a4fb06e61ebf5be8d7c8504a782bc3687a14f3e630c841e960b82999";
 pub const EXPECTED_REFERENCE_TARGET_IDS_SHA256: &str =
     "84276b6d97342e9ec1619424ddacb5b429e98e1862e03359afc837b65bb3392e";
 pub const EXPECTED_REFERENCE_OCCURRENCE_COUNT: usize = 2_458;
@@ -4378,17 +4378,20 @@ fn verify_ordinary_union_source_contracts(
         };
         let top_level_shape = identity::ordinary_union_has_top_level_shape(union);
         if top_level_shape {
+            // A generic-signed whole-schema union owns the candidate whose
+            // symbol + generic signature reproduce the signed union name;
+            // bare unions keep the exact-symbol contract unchanged.
             let top_level_source_key = format!("top|{}", union.union_name);
             match top_level_by_key.get(top_level_source_key.as_str()).copied() {
                 Some(candidate)
                     if candidate.slice_id == target.slice_id
-                        && candidate.symbol == union.union_name
-                        && candidate.generic_signature.is_empty()
+                        && format!("{}{}", candidate.symbol, candidate.generic_signature)
+                            == union.union_name
                         && candidate.source_kind == "confirmed" => {}
                 _ => out.push(Violation::new(
                     "source_union_top_level_owner_mismatch",
                     &target.row_id,
-                    "a wire-backed top-level ordinary union requires one same-slice confirmed top-level source candidate with the exact union name",
+                    "a top-level ordinary union requires one same-slice confirmed top-level source candidate naming the exact signed union family",
                 )),
             }
         }

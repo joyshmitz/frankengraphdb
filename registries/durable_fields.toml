@@ -6,7 +6,7 @@ schema_version = 1
 
 [registry]
 name = "durable_fields"
-registry_epoch = 10
+registry_epoch = 11
 
 [[field]]
 containing_schema = "AuthorityBindingRecord"
@@ -2939,6 +2939,17 @@ version_status = "reserved"
 max_size_bytes = 65536
 
 [[union]]
+union_name = "LeaseWindowSuccessorProof"
+containing_schema = "LeaseWindowSuccessorProof"
+union_path = "LeaseWindowSuccessorProof"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["LeaseWindowSuccessorProof"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union]]
 union_name = "NewDatabaseIdentityTargetCreationCommitment"
 containing_schema = "NewDatabaseIdentityTargetCreationCommitment"
 union_path = "NewDatabaseIdentityTargetCreationCommitment"
@@ -2960,6 +2971,28 @@ allowed_containing_schemas = ["RemoteAuthorityConfigurationEvidence"]
 role_predicate = "true"
 version_status = "reserved"
 max_size_bytes = 65537
+
+[[union]]
+union_name = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+containing_schema = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+union_path = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union]]
+union_name = "RoleTimeIssuanceReservationClosure<Role>"
+containing_schema = "RoleTimeIssuanceReservationClosure<Role>"
+union_path = "RoleTimeIssuanceReservationClosure<Role>"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["RoleTimeIssuanceReservationClosure<Role>"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
 
 [[union]]
 union_name = "RoleTransitionActivationState"
@@ -2994,6 +3027,17 @@ allowed_containing_schemas = ["ServicePromotionExternalOperationRecord<Local>", 
 role_predicate = "role-local || role-meta"
 version_status = "active"
 max_size_bytes = 1
+
+[[union]]
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["TimeAuthorityObservationImport"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
 
 [[union_arm]]
 union_name = "KeyDestroyExternalAckRef"
@@ -3100,6 +3144,32 @@ version_status = "reserved"
 max_size_bytes = 65536
 
 [[union_arm]]
+union_name = "LeaseWindowSuccessorProof"
+containing_schema = "LeaseWindowSuccessorProof"
+union_path = "LeaseWindowSuccessorProof"
+arm_tag = 0x0001
+source_arm_name = "SameEpochNonshrinking"
+stable_name = "same_epoch_nonshrinking"
+payload_kind = "inline-record"
+payload_sha256 = "b482a12cd6a8810fcce36b57ad89c2b06bc4aa9db5788f4cf4185878a836d7a0"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+union_name = "LeaseWindowSuccessorProof"
+containing_schema = "LeaseWindowSuccessorProof"
+union_path = "LeaseWindowSuccessorProof"
+arm_tag = 0x0002
+source_arm_name = "CrossEpochHandoff"
+stable_name = "cross_epoch_handoff"
+payload_kind = "inline-record"
+payload_sha256 = "3ac29c7218f690db47f2f6621d69f992f5249e3bebd3376bbbbe3a39e8f83f7c"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
 union_name = "NewDatabaseIdentityTargetCreationCommitment"
 containing_schema = "NewDatabaseIdentityTargetCreationCommitment"
 union_path = "NewDatabaseIdentityTargetCreationCommitment"
@@ -3163,6 +3233,58 @@ payload_sha256 = "3a2d87d0f381667522afda570d38ae9c32537aede9bb42bee73ef3dbb8d5a7
 role_predicate = "true"
 version_status = "reserved"
 max_size_bytes = 65536
+
+[[union_arm]]
+union_name = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+containing_schema = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+union_path = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+arm_tag = 0x0001
+source_arm_name = "Local"
+stable_name = "local"
+payload_kind = "inline-record"
+payload_sha256 = "3f227129e63a40119fc9543a612d3a59c94f1d8b277d599106845f44c4c38f7f"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+union_name = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+containing_schema = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+union_path = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+arm_tag = 0x0002
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "a2d585b3affdea5205dcb206ccd12e9da68a9b05e811637b29b17f5de6587f0d"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+union_name = "RoleTimeIssuanceReservationClosure<Role>"
+containing_schema = "RoleTimeIssuanceReservationClosure<Role>"
+union_path = "RoleTimeIssuanceReservationClosure<Role>"
+arm_tag = 0x0001
+source_arm_name = "Local"
+stable_name = "local"
+payload_kind = "inline-record"
+payload_sha256 = "9af948de9d4fe80631aa0d5ebf3c8bb8d12cbbaf17cdeeaa92a187805551fcb5"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+union_name = "RoleTimeIssuanceReservationClosure<Role>"
+containing_schema = "RoleTimeIssuanceReservationClosure<Role>"
+union_path = "RoleTimeIssuanceReservationClosure<Role>"
+arm_tag = 0x0002
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "7fb874898ece3bb4b0b6019155cc16ef6012fe084820417b5a3e1121509df3fa"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
 
 [[union_arm]]
 union_name = "RoleTransitionActivationState"
@@ -3261,6 +3383,45 @@ payload_kind = "unit"
 role_predicate = "role-local || role-meta"
 version_status = "active"
 max_size_bytes = 1
+
+[[union_arm]]
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+arm_tag = 0x0001
+source_arm_name = "Local"
+stable_name = "local"
+payload_kind = "inline-record"
+payload_sha256 = "122dd790c0feb91cca6bbfd246d9cb91ab13c71660dd34c723b43af71a5c5452"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+arm_tag = 0x0002
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "7d9d7a18c38f5ea503b9fb564cb7a3c67c5f61f3670c0969364d9050c914436a"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+arm_tag = 0x0003
+source_arm_name = "Shard"
+stable_name = "shard"
+payload_kind = "inline-record"
+payload_sha256 = "4f792838d90a9b715d2fa615c0c0ea99bbbe83497d548e0c0550a0367a53c8c2"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
 
 [[reference_union]]
 union_name = "MandatoryInventoryRef"

@@ -1046,6 +1046,15 @@ pub fn ordinary_union_has_top_level_shape(union: &OrdinaryUnion) -> bool {
         && union.union_path == union.union_name
 }
 
+/// The generic-free family symbol of a possibly generic-signed schema name.
+/// One registered kind row commits every expansion of its family (the same
+/// precedent as wire-family census coverage), so ordinary-union schema
+/// resolution matches `RoleTimeIssuanceReservationClosure<Role>` to the
+/// registered `RoleTimeIssuanceReservationClosure` row.
+pub fn generic_free_family(name: &str) -> &str {
+    name.split('<').next().unwrap_or(name)
+}
+
 /// Independent, review-updated pins for the released identity assignments.
 ///
 /// Registry rows are the canonical descriptions; these constants are compact
@@ -1054,12 +1063,12 @@ pub fn ordinary_union_has_top_level_shape(union: &OrdinaryUnion) -> bool {
 /// row, reassigning its code/tag, or silently changing a union arm therefore
 /// fails even when the resulting current snapshot is internally consistent.
 pub fn assignment_pins(r: &IdentityRegistries) -> Vec<AssignmentPin> {
-    const LOGICAL: &str = "fnv1a64:ad98ff147be26bc8";
+    const LOGICAL: &str = "fnv1a64:46a4fe49cca7b4b6";
     const PHYSICAL: &str = "fnv1a64:6eb820a69bc263b2";
     const BOOTSTRAP: &str = "fnv1a64:c756ad93d4fcbcf7";
     const PREBOOTSTRAP: &str = "fnv1a64:d2a221d86d3adc80";
     const WIRE: &str = "fnv1a64:0f02a754916d418a";
-    const FIELDS: &str = "fnv1a64:22ddf99b2932df3b";
+    const FIELDS: &str = "fnv1a64:25d8b152aee22dac";
 
     let logical = rows_pin(
         r.logical
@@ -1181,7 +1190,7 @@ pub fn assignment_pins(r: &IdentityRegistries) -> Vec<AssignmentPin> {
     vec![
         AssignmentPin {
             registry: "logical_object_kinds",
-            expected_epoch: 3,
+            expected_epoch: 4,
             actual_epoch: r.logical_epoch,
             expected_pin: LOGICAL,
             actual_pin: logical,
@@ -1216,7 +1225,7 @@ pub fn assignment_pins(r: &IdentityRegistries) -> Vec<AssignmentPin> {
         },
         AssignmentPin {
             registry: "durable_fields",
-            expected_epoch: 10,
+            expected_epoch: 11,
             actual_epoch: r.fields_epoch,
             expected_pin: FIELDS,
             actual_pin: fields,
@@ -1981,15 +1990,23 @@ pub fn validate_identity(r: &IdentityRegistries) -> Vec<Violation> {
         // wire-variant bijection because the union has no independent wire
         // encoding surface.
         let top_level_logical_parent = (top_level_shape && top_level_wire_parent.is_none())
-            .then(|| logical_by_name.get(u.union_name.as_str()).copied())
+            .then(|| {
+                logical_by_name
+                    .get(generic_free_family(u.union_name.as_str()))
+                    .copied()
+            })
             .flatten();
         let top_level_logical_backed = top_level_logical_parent.is_some();
+        // Resolution is by generic-free family: a generic-signed whole-schema
+        // union or a union embedded in a generic-signed schema resolves
+        // through the registered family row, which commits every expansion.
+        let containing_family = generic_free_family(u.containing_schema.as_str());
         let containing_schema_classes =
-            usize::from(logical_by_name.contains_key(u.containing_schema.as_str()))
-                + usize::from(physical_names.contains(u.containing_schema.as_str()))
-                + usize::from(bootstrap_names.contains(u.containing_schema.as_str()))
-                + usize::from(prebootstrap_names.contains(u.containing_schema.as_str()))
-                + usize::from(wire_names.contains(u.containing_schema.as_str()));
+            usize::from(logical_by_name.contains_key(containing_family))
+                + usize::from(physical_names.contains(containing_family))
+                + usize::from(bootstrap_names.contains(containing_family))
+                + usize::from(prebootstrap_names.contains(containing_family))
+                + usize::from(wire_names.contains(containing_family));
         if containing_schema_classes != 1 {
             out.push(v(
                 "ordinary_union_unresolved_schema",

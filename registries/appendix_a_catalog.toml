@@ -38,9 +38,9 @@ occurrence_count = 2458
 occurrence_transcript_sha256 = "9878e84c7c72d0e098a66794ce56a00ffdfed62aaf251bc0d87efd665e0a630b"
 
 [target_manifest]
-target_count = 366
+target_count = 382
 projection_fallback_count = 83
-target_source_assignment_sha256 = "fe41bce715356466560b10148bcfb7fedbba43d1100835808bb8983abead690c"
+target_source_assignment_sha256 = "935c4ff5541fd7af4285b5641c2eb82e412704e453ecb371d2b4fe2b37bc1821"
 
 [maintenance_proof]
 row_id = "catalog:maintenance-proof:appendix-a"
@@ -580,7 +580,7 @@ ambiguity_ids_sha256 = "c87a4d5bba2765dd7de49b5ee0b5d6772b4d06b2673f5675c6239ad0
 
 [[projection_epoch]]
 registry = "logical_object_kinds"
-registry_epoch = 3
+registry_epoch = 4
 
 [[projection_epoch]]
 registry = "physical_record_kinds"
@@ -600,7 +600,7 @@ registry_epoch = 8
 
 [[projection_epoch]]
 registry = "durable_fields"
-registry_epoch = 10
+registry_epoch = 11
 
 [[logical_kind]]
 slice_id = "a03"
@@ -1194,6 +1194,39 @@ construction_order = 25
 role_predicate = "true"
 max_size_bytes = 16777216
 golden_corpus = "corpus/logical/time_validation_evidence/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:lease-window-successor-proof"
+object_kind = 0x02ea
+name = "LeaseWindowSuccessorProof"
+status = "reserved"
+construction_order = 26
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/lease_window_successor_proof/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:role-time-bound-subject-inventory-closure"
+object_kind = 0x041c
+name = "RoleTimeBoundSubjectInventoryClosure"
+status = "reserved"
+construction_order = 40
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/role_time_bound_subject_inventory_closure/"
+
+[[logical_kind]]
+slice_id = "a16"
+row_id = "a16:logical-kind:role-time-issuance-reservation-closure"
+object_kind = 0x041d
+name = "RoleTimeIssuanceReservationClosure"
+status = "reserved"
+construction_order = 41
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/role_time_issuance_reservation_closure/"
 
 [[physical_kind]]
 slice_id = "a02"
@@ -5848,6 +5881,58 @@ role_predicate = "role-local || role-meta"
 version_status = "active"
 max_size_bytes = 1
 
+[[union]]
+slice_id = "a16"
+row_id = "a16:union:lease-window-successor-proof-8ede6b99eb826526"
+union_name = "LeaseWindowSuccessorProof"
+containing_schema = "LeaseWindowSuccessorProof"
+union_path = "LeaseWindowSuccessorProof"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["LeaseWindowSuccessorProof"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union]]
+slice_id = "a16"
+row_id = "a16:union:time-authority-observation-import-892d1c3c4994dbac"
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["TimeAuthorityObservationImport"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union]]
+slice_id = "a16"
+row_id = "a16:union:role-time-bound-subject-inventory-closure-role-authority-owning-role-844633f3bd3fc9a9"
+union_name = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+containing_schema = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+union_path = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union]]
+slice_id = "a16"
+row_id = "a16:union:role-time-issuance-reservation-closure-role-0c65af51fbe6efad"
+union_name = "RoleTimeIssuanceReservationClosure<Role>"
+containing_schema = "RoleTimeIssuanceReservationClosure<Role>"
+union_path = "RoleTimeIssuanceReservationClosure<Role>"
+tag_wire_type = "u8"
+encoding_context = "closed-tagged"
+allowed_containing_schemas = ["RoleTimeIssuanceReservationClosure<Role>"]
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
 [[union_arm]]
 slice_id = "a20"
 row_id = "a20:union-arm:service-promotion-external-operation-kind-catalog-reserve-hidden-cb21b33f2418f561"
@@ -5903,6 +5988,141 @@ payload_kind = "unit"
 role_predicate = "role-local || role-meta"
 version_status = "active"
 max_size_bytes = 1
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:lease-window-successor-proof-same-epoch-nonshrinking-1656799941617f4c"
+union_name = "LeaseWindowSuccessorProof"
+containing_schema = "LeaseWindowSuccessorProof"
+union_path = "LeaseWindowSuccessorProof"
+arm_tag = 0x0001
+source_arm_name = "SameEpochNonshrinking"
+stable_name = "same_epoch_nonshrinking"
+payload_kind = "inline-record"
+payload_sha256 = "b482a12cd6a8810fcce36b57ad89c2b06bc4aa9db5788f4cf4185878a836d7a0"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:lease-window-successor-proof-cross-epoch-handoff-07a49ef7885e9d19"
+union_name = "LeaseWindowSuccessorProof"
+containing_schema = "LeaseWindowSuccessorProof"
+union_path = "LeaseWindowSuccessorProof"
+arm_tag = 0x0002
+source_arm_name = "CrossEpochHandoff"
+stable_name = "cross_epoch_handoff"
+payload_kind = "inline-record"
+payload_sha256 = "3ac29c7218f690db47f2f6621d69f992f5249e3bebd3376bbbbe3a39e8f83f7c"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:time-authority-observation-import-local-fc11bf973cade48b"
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+arm_tag = 0x0001
+source_arm_name = "Local"
+stable_name = "local"
+payload_kind = "inline-record"
+payload_sha256 = "122dd790c0feb91cca6bbfd246d9cb91ab13c71660dd34c723b43af71a5c5452"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:time-authority-observation-import-meta-06aabdf215f4b2fc"
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+arm_tag = 0x0002
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "7d9d7a18c38f5ea503b9fb564cb7a3c67c5f61f3670c0969364d9050c914436a"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:time-authority-observation-import-shard-3db8e9c6e45baec4"
+union_name = "TimeAuthorityObservationImport"
+containing_schema = "TimeAuthorityObservationImport"
+union_path = "TimeAuthorityObservationImport"
+arm_tag = 0x0003
+source_arm_name = "Shard"
+stable_name = "shard"
+payload_kind = "inline-record"
+payload_sha256 = "4f792838d90a9b715d2fa615c0c0ea99bbbe83497d548e0c0550a0367a53c8c2"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:role-time-bound-subject-inventory-closure-role-authority-owning-role-local-927e652d1962973e"
+union_name = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+containing_schema = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+union_path = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+arm_tag = 0x0001
+source_arm_name = "Local"
+stable_name = "local"
+payload_kind = "inline-record"
+payload_sha256 = "3f227129e63a40119fc9543a612d3a59c94f1d8b277d599106845f44c4c38f7f"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:role-time-bound-subject-inventory-closure-role-authority-owning-role-meta-a2af26b1dfb7ac75"
+union_name = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+containing_schema = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+union_path = "RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+arm_tag = 0x0002
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "a2d585b3affdea5205dcb206ccd12e9da68a9b05e811637b29b17f5de6587f0d"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:role-time-issuance-reservation-closure-role-local-9304f31e57ff3b2f"
+union_name = "RoleTimeIssuanceReservationClosure<Role>"
+containing_schema = "RoleTimeIssuanceReservationClosure<Role>"
+union_path = "RoleTimeIssuanceReservationClosure<Role>"
+arm_tag = 0x0001
+source_arm_name = "Local"
+stable_name = "local"
+payload_kind = "inline-record"
+payload_sha256 = "9af948de9d4fe80631aa0d5ebf3c8bb8d12cbbaf17cdeeaa92a187805551fcb5"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
+
+[[union_arm]]
+slice_id = "a16"
+row_id = "a16:union-arm:role-time-issuance-reservation-closure-role-meta-44e3cdca4aedef6c"
+union_name = "RoleTimeIssuanceReservationClosure<Role>"
+containing_schema = "RoleTimeIssuanceReservationClosure<Role>"
+union_path = "RoleTimeIssuanceReservationClosure<Role>"
+arm_tag = 0x0002
+source_arm_name = "Meta"
+stable_name = "meta"
+payload_kind = "inline-record"
+payload_sha256 = "7fb874898ece3bb4b0b6019155cc16ef6012fe084820417b5a3e1121509df3fa"
+role_predicate = "true"
+version_status = "reserved"
+max_size_bytes = 16777216
 
 [[reservation]]
 row_id = "a10:reservation:activated-delta-retention-cut"
@@ -8467,7 +8687,7 @@ symbol = "LeaseWindowSuccessorProof"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x02ea"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a19:reservation:leases-revoked-or-expired-through"
@@ -11572,7 +11792,7 @@ symbol = "RoleTimeBoundSubjectInventoryClosure"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x041c"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a16:reservation:role-time-issuance-reservation-closure"
@@ -11581,7 +11801,7 @@ symbol = "RoleTimeIssuanceReservationClosure"
 row_kind = "logical-kind"
 identity_class = "logical"
 code_reservation = "0x041d"
-disposition = "reserved"
+disposition = "existing"
 
 [[reservation]]
 row_id = "a01:reservation:role-transition-activation-state"
@@ -17708,7 +17928,7 @@ symbol = "LeaseWindowSuccessorProof"
 generic_signature = ""
 source_key = "top|LeaseWindowSuccessorProof"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2235"]
 
 [[top_level_candidate]]
@@ -23118,7 +23338,7 @@ symbol = "RoleTimeBoundSubjectInventoryClosure"
 generic_signature = "<Role:AuthorityOwningRole>"
 source_key = "top|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2197"]
 
 [[top_level_candidate]]
@@ -23128,7 +23348,7 @@ symbol = "RoleTimeIssuanceReservationClosure"
 generic_signature = "<Role>"
 source_key = "top|RoleTimeIssuanceReservationClosure<Role>"
 source_kind = "confirmed"
-identity_class = "unclassified"
+identity_class = "logical"
 source_locations = ["a16:2193"]
 
 [[top_level_candidate]]
@@ -28436,6 +28656,134 @@ target_row_id = "a16:logical-kind:time-validation-evidence"
 slice_id = "a16"
 source_key = "top|TimeValidationEvidence"
 target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-lease-window-successor-proof"
+target_row_id = "a16:logical-kind:lease-window-successor-proof"
+slice_id = "a16"
+source_key = "top|LeaseWindowSuccessorProof"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-role-time-bound-subject-inventory-closure"
+target_row_id = "a16:logical-kind:role-time-bound-subject-inventory-closure"
+slice_id = "a16"
+source_key = "top|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:logical-kind-role-time-issuance-reservation-closure"
+target_row_id = "a16:logical-kind:role-time-issuance-reservation-closure"
+slice_id = "a16"
+source_key = "top|RoleTimeIssuanceReservationClosure<Role>"
+target_kind = "logical-kind"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-lease-window-successor-proof-8ede6b99eb826526"
+target_row_id = "a16:union:lease-window-successor-proof-8ede6b99eb826526"
+slice_id = "a16"
+source_key = "union|LeaseWindowSuccessorProof|LeaseWindowSuccessorProof"
+target_kind = "union"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-lease-window-successor-proof-same-epoch-nonshrinking-1656799941617f4c"
+target_row_id = "a16:union-arm:lease-window-successor-proof-same-epoch-nonshrinking-1656799941617f4c"
+slice_id = "a16"
+source_key = "arm|LeaseWindowSuccessorProof|LeaseWindowSuccessorProof|SameEpochNonshrinking"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-lease-window-successor-proof-cross-epoch-handoff-07a49ef7885e9d19"
+target_row_id = "a16:union-arm:lease-window-successor-proof-cross-epoch-handoff-07a49ef7885e9d19"
+slice_id = "a16"
+source_key = "arm|LeaseWindowSuccessorProof|LeaseWindowSuccessorProof|CrossEpochHandoff"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-time-authority-observation-import-892d1c3c4994dbac"
+target_row_id = "a16:union:time-authority-observation-import-892d1c3c4994dbac"
+slice_id = "a16"
+source_key = "union|TimeAuthorityObservationImport|TimeAuthorityObservationImport"
+target_kind = "union"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-time-authority-observation-import-local-fc11bf973cade48b"
+target_row_id = "a16:union-arm:time-authority-observation-import-local-fc11bf973cade48b"
+slice_id = "a16"
+source_key = "arm|TimeAuthorityObservationImport|TimeAuthorityObservationImport|Local"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-time-authority-observation-import-meta-06aabdf215f4b2fc"
+target_row_id = "a16:union-arm:time-authority-observation-import-meta-06aabdf215f4b2fc"
+slice_id = "a16"
+source_key = "arm|TimeAuthorityObservationImport|TimeAuthorityObservationImport|Meta"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-time-authority-observation-import-shard-3db8e9c6e45baec4"
+target_row_id = "a16:union-arm:time-authority-observation-import-shard-3db8e9c6e45baec4"
+slice_id = "a16"
+source_key = "arm|TimeAuthorityObservationImport|TimeAuthorityObservationImport|Shard"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-role-time-bound-subject-inventory-closure-role-authority-owning-role-844633f3bd3fc9a9"
+target_row_id = "a16:union:role-time-bound-subject-inventory-closure-role-authority-owning-role-844633f3bd3fc9a9"
+slice_id = "a16"
+source_key = "union|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>"
+target_kind = "union"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-role-time-bound-subject-inventory-closure-role-authority-owning-role-local-927e652d1962973e"
+target_row_id = "a16:union-arm:role-time-bound-subject-inventory-closure-role-authority-owning-role-local-927e652d1962973e"
+slice_id = "a16"
+source_key = "arm|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>|Local"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-role-time-bound-subject-inventory-closure-role-authority-owning-role-meta-a2af26b1dfb7ac75"
+target_row_id = "a16:union-arm:role-time-bound-subject-inventory-closure-role-authority-owning-role-meta-a2af26b1dfb7ac75"
+slice_id = "a16"
+source_key = "arm|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>|RoleTimeBoundSubjectInventoryClosure<Role:AuthorityOwningRole>|Meta"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-role-time-issuance-reservation-closure-role-0c65af51fbe6efad"
+target_row_id = "a16:union:role-time-issuance-reservation-closure-role-0c65af51fbe6efad"
+slice_id = "a16"
+source_key = "union|RoleTimeIssuanceReservationClosure<Role>|RoleTimeIssuanceReservationClosure<Role>"
+target_kind = "union"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-role-time-issuance-reservation-closure-role-local-9304f31e57ff3b2f"
+target_row_id = "a16:union-arm:role-time-issuance-reservation-closure-role-local-9304f31e57ff3b2f"
+slice_id = "a16"
+source_key = "arm|RoleTimeIssuanceReservationClosure<Role>|RoleTimeIssuanceReservationClosure<Role>|Local"
+target_kind = "union-arm"
+definition_status = "declared"
+
+[[target]]
+row_id = "a16:target:union-arm-role-time-issuance-reservation-closure-role-meta-44e3cdca4aedef6c"
+target_row_id = "a16:union-arm:role-time-issuance-reservation-closure-role-meta-44e3cdca4aedef6c"
+slice_id = "a16"
+source_key = "arm|RoleTimeIssuanceReservationClosure<Role>|RoleTimeIssuanceReservationClosure<Role>|Meta"
+target_kind = "union-arm"
 definition_status = "declared"
 
 [[source_symbol_disposition]]

@@ -6,7 +6,7 @@ schema_version = 1
 
 [registry]
 name = "logical_object_kinds"
-registry_epoch = 3
+registry_epoch = 4
 
 [[kind]]
 object_kind = 0x0001
@@ -270,6 +270,15 @@ max_size_bytes = 16777216
 golden_corpus = "corpus/logical/export_leaf/"
 
 [[kind]]
+object_kind = 0x02ea
+name = "LeaseWindowSuccessorProof"
+status = "reserved"
+construction_order = 26
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/lease_window_successor_proof/"
+
+[[kind]]
 object_kind = 0x037c
 name = "PayloadAvailabilityCertificate"
 status = "reserved"
@@ -421,6 +430,24 @@ construction_order = 34
 role_predicate = "true"
 max_size_bytes = 16777216
 golden_corpus = "corpus/logical/remote_retention_release_tombstone/"
+
+[[kind]]
+object_kind = 0x041c
+name = "RoleTimeBoundSubjectInventoryClosure"
+status = "reserved"
+construction_order = 40
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/role_time_bound_subject_inventory_closure/"
+
+[[kind]]
+object_kind = 0x041d
+name = "RoleTimeIssuanceReservationClosure"
+status = "reserved"
+construction_order = 41
+role_predicate = "true"
+max_size_bytes = 16777216
+golden_corpus = "corpus/logical/role_time_issuance_reservation_closure/"
 
 [[kind]]
 object_kind = 0x041e
