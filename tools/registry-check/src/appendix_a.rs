@@ -3769,7 +3769,12 @@ fn covered_interior_field_keys(
                 .iter()
                 .any(|prefix| field.key.path.starts_with(prefix.as_str()))
         });
-        if arm_covered || wire_symbols.contains(owner) {
+        // Wire coverage matches the generic-free schema family: one
+        // registered wire row commits the envelope for every expansion of
+        // its family, so `StrongCiphertextRef<T>` interiors are committed by
+        // the `StrongCiphertextRef` row.  Non-generic owners have
+        // family == owner, and non-wire generic families stay uncovered.
+        if arm_covered || wire_symbols.contains(field.key.schema_family.as_str()) {
             covered.insert(field.key.source_key());
         }
     }
@@ -10188,9 +10193,18 @@ stable_name = "Ready"
     }
 
     fn field_candidate(owner: &str, path: &str, stable_name: &str) -> FieldCandidate {
+        generic_field_candidate(owner, owner, path, stable_name)
+    }
+
+    fn generic_field_candidate(
+        family: &str,
+        owner: &str,
+        path: &str,
+        stable_name: &str,
+    ) -> FieldCandidate {
         FieldCandidate {
             key: FieldCandidateKey {
-                schema_family: owner.to_owned(),
+                schema_family: family.to_owned(),
                 schema_owner: owner.to_owned(),
                 path: path.to_owned(),
                 stable_name: stable_name.to_owned(),
@@ -10331,6 +10345,41 @@ stable_name = "Ready"
         assert!(
             uncovered[0].msg.contains("NotARegisteredWireType"),
             "the targeted wire envelope covers its interior fields: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn wire_coverage_matches_the_generic_free_family_symbol() {
+        let census = census_with_slice(
+            "a01",
+            vec![
+                generic_field_candidate(
+                    "StrongCiphertextRef",
+                    "StrongCiphertextRef<T>",
+                    "StrongCiphertextRef<T>.ciphertext_digest",
+                    "ciphertext_digest",
+                ),
+                generic_field_candidate(
+                    "NotAWireFamily",
+                    "NotAWireFamily<T>",
+                    "NotAWireFamily<T>.value",
+                    "value",
+                ),
+            ],
+            Vec::new(),
+        );
+        let catalog = catalog_with_complete_a01();
+        let mut violations = Vec::new();
+        verify_complete_field_census_coverage(&catalog, &census, &mut violations);
+        let uncovered = uncovered_field_violations(&violations);
+        assert_eq!(
+            uncovered.len(),
+            1,
+            "one wire row commits the envelope for every expansion of its family: {violations:?}"
+        );
+        assert!(
+            uncovered[0].msg.contains("NotAWireFamily"),
+            "a generic family without a wire row stays uncovered: {violations:?}"
         );
     }
 
