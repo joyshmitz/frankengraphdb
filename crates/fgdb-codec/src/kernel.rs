@@ -75,6 +75,7 @@ pub struct KernelOutput {
 enum KernelOutputBytes {
     Owned(Vec<u8>),
     InlineVarint(varint::EncodedU64),
+    InlineOriginBirthOrder([u8; identity::ORIGIN_BIRTH_ORDER_KEY_BYTES]),
 }
 
 impl fmt::Debug for KernelOutput {
@@ -113,12 +114,23 @@ impl KernelOutput {
         }
     }
 
+    fn new_inline_origin_birth_order<K: KernelDispatch + ?Sized>(
+        kernel: &K,
+        bytes: [u8; identity::ORIGIN_BIRTH_ORDER_KEY_BYTES],
+    ) -> Self {
+        Self {
+            bytes: KernelOutputBytes::InlineOriginBirthOrder(bytes),
+            dispatch_path: kernel.dispatch_path(),
+        }
+    }
+
     /// Exact bytes produced by the selected kernel path.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         match &self.bytes {
             KernelOutputBytes::Owned(bytes) => bytes,
             KernelOutputBytes::InlineVarint(bytes) => bytes.as_bytes(),
+            KernelOutputBytes::InlineOriginBirthOrder(bytes) => bytes,
         }
     }
 
@@ -128,6 +140,7 @@ impl KernelOutput {
         match &self.bytes {
             KernelOutputBytes::Owned(bytes) => bytes.len(),
             KernelOutputBytes::InlineVarint(bytes) => bytes.len(),
+            KernelOutputBytes::InlineOriginBirthOrder(bytes) => bytes.len(),
         }
     }
 
@@ -137,6 +150,7 @@ impl KernelOutput {
         match &self.bytes {
             KernelOutputBytes::Owned(bytes) => bytes.is_empty(),
             KernelOutputBytes::InlineVarint(bytes) => bytes.is_empty(),
+            KernelOutputBytes::InlineOriginBirthOrder(bytes) => bytes.is_empty(),
         }
     }
 
@@ -152,6 +166,7 @@ impl KernelOutput {
         match self.bytes {
             KernelOutputBytes::Owned(bytes) => bytes,
             KernelOutputBytes::InlineVarint(bytes) => bytes.as_bytes().to_vec(),
+            KernelOutputBytes::InlineOriginBirthOrder(bytes) => bytes.to_vec(),
         }
     }
 }
@@ -462,6 +477,14 @@ pub trait IdentityColumnKernel: KernelDispatch {
         limits: identity::IdentityColumnLimits,
     ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError>;
 
+    /// Constructs a sorted identity column and admits per-prefix delta/FOR
+    /// slots in addition to the fixed and global-FOR candidates.
+    fn build_sorted_identity_column_with_delta_for_slots<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError>;
+
     /// Reconstructs one typed identity from an arbitrary-order column.
     fn identity_at<T: identity::ElementIdentity>(
         &self,
@@ -489,6 +512,27 @@ pub trait IdentityColumnKernel: KernelDispatch {
         column: &identity::IdentityColumn<T>,
         max_output_bytes: usize,
     ) -> Result<KernelOutput, identity::IdentityColumnError>;
+
+    /// Decodes one exact descriptor-bound scalar identity payload.
+    fn decode_identity_payload<T: identity::ElementIdentity>(
+        &self,
+        input: &[u8],
+        descriptor: identity::IdentityColumnDescriptor,
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::IdentityColumn<T>, identity::IdentityColumnError>;
+
+    /// Encodes the order-preserving scalar key for an element's immutable
+    /// origin and binds the exact bytes to this dispatch path.
+    fn encode_origin_birth_order<T: identity::ElementIdentity>(
+        &self,
+        value: identity::OriginBirthOrder<T>,
+    ) -> KernelOutput;
+
+    /// Decodes one exact order-preserving immutable-origin key.
+    fn decode_origin_birth_order<T: identity::ElementIdentity>(
+        &self,
+        input: &[u8],
+    ) -> Result<identity::OriginBirthOrder<T>, identity::OriginBirthOrderDecodeError>;
 }
 
 /// Checked deterministic block compression and decompression operations.
@@ -800,6 +844,14 @@ impl IdentityColumnKernel for ScalarKernels {
         identity::SortedIdentityColumn::try_new_with_for_slots(values, limits)
     }
 
+    fn build_sorted_identity_column_with_delta_for_slots<T: identity::ElementIdentity>(
+        &self,
+        values: &[T],
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::SortedIdentityColumn<T>, identity::IdentityColumnError> {
+        identity::SortedIdentityColumn::try_new_with_delta_for_slots(values, limits)
+    }
+
     fn identity_at<T: identity::ElementIdentity>(
         &self,
         column: &identity::IdentityColumn<T>,
@@ -832,6 +884,29 @@ impl IdentityColumnKernel for ScalarKernels {
         column
             .try_scalar_payload(max_output_bytes)
             .map(|bytes| KernelOutput::new(self, bytes))
+    }
+
+    fn decode_identity_payload<T: identity::ElementIdentity>(
+        &self,
+        input: &[u8],
+        descriptor: identity::IdentityColumnDescriptor,
+        limits: identity::IdentityColumnLimits,
+    ) -> Result<identity::IdentityColumn<T>, identity::IdentityColumnError> {
+        identity::IdentityColumn::try_from_scalar_payload(input, descriptor, limits)
+    }
+
+    fn encode_origin_birth_order<T: identity::ElementIdentity>(
+        &self,
+        value: identity::OriginBirthOrder<T>,
+    ) -> KernelOutput {
+        KernelOutput::new_inline_origin_birth_order(self, value.canonical_be_key())
+    }
+
+    fn decode_origin_birth_order<T: identity::ElementIdentity>(
+        &self,
+        input: &[u8],
+    ) -> Result<identity::OriginBirthOrder<T>, identity::OriginBirthOrderDecodeError> {
+        identity::OriginBirthOrder::try_from_canonical_be_key(input)
     }
 }
 
@@ -931,7 +1006,7 @@ fn diagnostic_u64(value: usize) -> Result<u64, DiagnosticOutputError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fgdb_types::{EId, VId};
+    use fgdb_types::{CommitSeq, EId, VId};
 
     const KERNELS: ScalarKernels = ScalarKernels;
 
@@ -1550,6 +1625,77 @@ mod tests {
         assert_eq!(
             identity::SortedIdentityColumn::try_new_with_for_slots(&unsorted, sorted_limit),
             sorted_error
+        );
+    }
+
+    #[test]
+    fn identity_delta_for_decode_and_origin_order_use_the_scalar_dispatch_seam() {
+        fn vid(epoch: u64, partition: u32, slot: u64) -> VId {
+            VId(identity::IdentityParts::try_new(epoch, partition, slot)
+                .expect("valid identity fixture")
+                .pack())
+        }
+
+        let mut values = (0..64).map(|slot| vid(3, 5, slot)).collect::<Vec<_>>();
+        values.extend((0..64).map(|offset| vid(4, 7, identity::MAX_SLOT - 63 + offset)));
+        let limits = identity::IdentityColumnLimits::new(values.len(), 2, usize::MAX);
+        let direct = identity::SortedIdentityColumn::try_new_with_delta_for_slots(&values, limits)
+            .expect("direct delta/FOR identity construction");
+        let dispatched = IdentityColumnKernel::build_sorted_identity_column_with_delta_for_slots(
+            &KERNELS, &values, limits,
+        )
+        .expect("dispatched delta/FOR identity construction");
+        assert_eq!(dispatched, direct);
+        assert_eq!(
+            dispatched.as_column().representation(),
+            identity::IdentityRepresentation::SharedPrefixDeltaFor
+        );
+
+        let output = IdentityColumnKernel::encode_identity_payload(
+            &KERNELS,
+            dispatched.as_column(),
+            usize::MAX,
+        )
+        .expect("bounded delta/FOR payload");
+        let decoded = IdentityColumnKernel::decode_identity_payload::<VId>(
+            &KERNELS,
+            output.as_bytes(),
+            dispatched.as_column().descriptor(),
+            limits,
+        )
+        .expect("bounded delta/FOR decode");
+        assert_eq!(&decoded, dispatched.as_column());
+        assert_eq!(output.dispatch_path(), DispatchPath::Scalar);
+
+        let origin = identity::OriginBirthOrder::new(CommitSeq(17), 19, 23, vid(29, 31, 37));
+        let encoded = IdentityColumnKernel::encode_origin_birth_order(&KERNELS, origin);
+        assert_eq!(encoded.len(), identity::ORIGIN_BIRTH_ORDER_KEY_BYTES);
+        assert_eq!(encoded.dispatch_path(), DispatchPath::Scalar);
+        let evidence = crate::evidence::CodecRunRow::try_from_kernel_output(
+            "origin-birth-order-scalar-key",
+            "kernel-unit",
+            1,
+            &encoded,
+        )
+        .expect("origin key evidence");
+        assert_eq!(
+            evidence.encoded_bytes(),
+            identity::ORIGIN_BIRTH_ORDER_KEY_BYTES
+        );
+        assert_eq!(evidence.dispatch_path(), DispatchPath::Scalar);
+        assert_eq!(
+            IdentityColumnKernel::decode_origin_birth_order::<VId>(&KERNELS, encoded.as_bytes(),),
+            Ok(origin)
+        );
+        assert_eq!(
+            IdentityColumnKernel::decode_origin_birth_order::<VId>(
+                &KERNELS,
+                &encoded.as_bytes()[..encoded.len() - 1],
+            ),
+            Err(identity::OriginBirthOrderDecodeError::LengthMismatch {
+                expected: identity::ORIGIN_BIRTH_ORDER_KEY_BYTES,
+                actual: identity::ORIGIN_BIRTH_ORDER_KEY_BYTES - 1,
+            })
         );
     }
 

@@ -4,9 +4,10 @@
 //! It assigns no tags or codec IDs and defines no wire envelope. The
 //! [`IdentityColumn`] chooser compares only the scalar payload represented
 //! here: raw 16-byte identities versus an 11-byte sorted prefix dictionary,
-//! fixed-width prefix indexes, and either 6-byte or canonical FOR-packed slots.
-//! FOR admission is explicit on [`SortedIdentityColumn`] and remains below
-//! durable codec registration and framing.
+//! fixed-width prefix indexes, and either 6-byte, canonical global-FOR, or
+//! canonical per-prefix delta/FOR slots. Compressed-slot admission is explicit
+//! on [`SortedIdentityColumn`] and remains below durable codec registration and
+//! framing.
 //!
 //! Row order is always retained. Binary search is exposed only by
 //! [`SortedIdentityColumn`], whose constructor validates monotone identity
@@ -16,7 +17,7 @@
 
 use core::{fmt, iter::FusedIterator, marker::PhantomData};
 
-use fgdb_types::{EId, VId};
+use fgdb_types::{CommitSeq, EId, VId};
 
 use crate::bitpack;
 
@@ -33,6 +34,10 @@ const RAW_ID_BYTES: usize = 16;
 const PREFIX_BYTES: usize = 11;
 const SLOT_BYTES: usize = 6;
 const FOR_SLOT_METADATA_BYTES: usize = SLOT_BYTES + 1;
+const DELTA_FOR_WIDTH_BYTES: usize = 1;
+
+/// Bytes in the order-preserving scalar key for one [`OriginBirthOrder`].
+pub const ORIGIN_BIRTH_ORDER_KEY_BYTES: usize = 40;
 
 /// Checked decomposition of a `VId` or `EId`.
 ///
@@ -200,6 +205,135 @@ impl ElementIdentity for EId {
     }
 }
 
+/// Immutable creation order for one stable graph element.
+///
+/// The tuple order is exactly
+/// `(commit_seq, intent_ordinal, merge_ordinal, element_id)`. The canonical
+/// big-endian key preserves that order byte-for-byte, independently of run
+/// position, compaction, or branch admission order. This is a scalar semantic
+/// key; durable field registration and enclosing object framing remain outside
+/// this crate.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OriginBirthOrder<T: ElementIdentity> {
+    commit_seq: CommitSeq,
+    intent_ordinal: u64,
+    merge_ordinal: u64,
+    element_id: T,
+}
+
+impl<T: ElementIdentity> OriginBirthOrder<T> {
+    /// Constructs the immutable origin tuple.
+    #[must_use]
+    pub const fn new(
+        commit_seq: CommitSeq,
+        intent_ordinal: u64,
+        merge_ordinal: u64,
+        element_id: T,
+    ) -> Self {
+        Self {
+            commit_seq,
+            intent_ordinal,
+            merge_ordinal,
+            element_id,
+        }
+    }
+
+    /// Returns the creating commit sequence.
+    #[must_use]
+    pub const fn commit_seq(self) -> CommitSeq {
+        self.commit_seq
+    }
+
+    /// Returns the source intent's canonical ordinal.
+    #[must_use]
+    pub const fn intent_ordinal(self) -> u64 {
+        self.intent_ordinal
+    }
+
+    /// Returns the deterministic merge ordinal.
+    #[must_use]
+    pub const fn merge_ordinal(self) -> u64 {
+        self.merge_ordinal
+    }
+
+    /// Returns the never-recycled stable element identity.
+    #[must_use]
+    pub const fn element_id(self) -> T {
+        self.element_id
+    }
+
+    /// Returns the order-preserving fixed-width scalar key.
+    #[must_use]
+    pub fn canonical_be_key(self) -> [u8; ORIGIN_BIRTH_ORDER_KEY_BYTES] {
+        let mut key = [0_u8; ORIGIN_BIRTH_ORDER_KEY_BYTES];
+        key[..8].copy_from_slice(&self.commit_seq.0.to_be_bytes());
+        key[8..16].copy_from_slice(&self.intent_ordinal.to_be_bytes());
+        key[16..24].copy_from_slice(&self.merge_ordinal.to_be_bytes());
+        key[24..].copy_from_slice(&self.element_id.identity_bits().to_be_bytes());
+        key
+    }
+
+    /// Decodes one exact order-preserving scalar key.
+    ///
+    /// The fixed length is checked before any field is read. Every 128-bit
+    /// suffix is a valid `VId` or `EId`, so no additional value-domain
+    /// rejection is required.
+    pub fn try_from_canonical_be_key(input: &[u8]) -> Result<Self, OriginBirthOrderDecodeError> {
+        if input.len() != ORIGIN_BIRTH_ORDER_KEY_BYTES {
+            return Err(OriginBirthOrderDecodeError::LengthMismatch {
+                expected: ORIGIN_BIRTH_ORDER_KEY_BYTES,
+                actual: input.len(),
+            });
+        }
+
+        let length_error = || OriginBirthOrderDecodeError::LengthMismatch {
+            expected: ORIGIN_BIRTH_ORDER_KEY_BYTES,
+            actual: input.len(),
+        };
+        let commit_seq = CommitSeq(u64::from_be_bytes(
+            read_array::<8>(input, 0).ok_or_else(length_error)?,
+        ));
+        let intent_ordinal =
+            u64::from_be_bytes(read_array::<8>(input, 8).ok_or_else(length_error)?);
+        let merge_ordinal =
+            u64::from_be_bytes(read_array::<8>(input, 16).ok_or_else(length_error)?);
+        let element_id = T::from_identity_bits(u128::from_be_bytes(
+            read_array::<16>(input, 24).ok_or_else(length_error)?,
+        ));
+        Ok(Self::new(
+            commit_seq,
+            intent_ordinal,
+            merge_ordinal,
+            element_id,
+        ))
+    }
+}
+
+/// Rejected scalar [`OriginBirthOrder`] key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OriginBirthOrderDecodeError {
+    /// The fixed-width key was truncated or had trailing bytes.
+    LengthMismatch {
+        /// Exact canonical byte count.
+        expected: usize,
+        /// Supplied byte count.
+        actual: usize,
+    },
+}
+
+impl fmt::Display for OriginBirthOrderDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::LengthMismatch { expected, actual } => write!(
+                formatter,
+                "origin-birth-order key needs exactly {expected} bytes, got {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OriginBirthOrderDecodeError {}
+
 /// Construction ceilings for one identity column.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IdentityColumnLimits {
@@ -241,6 +375,48 @@ impl IdentityColumnLimits {
     }
 }
 
+/// Out-of-band metadata needed to decode one registry-independent payload.
+///
+/// No tag or count is embedded in [`IdentityColumn::try_scalar_payload`].
+/// Durable run/block framing will obtain these fields from its registered
+/// codec-table entry; scalar callers pass the exact same information directly.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IdentityColumnDescriptor {
+    representation: IdentityRepresentation,
+    rows: usize,
+    prefixes: usize,
+}
+
+impl IdentityColumnDescriptor {
+    /// Describes one scalar payload.
+    #[must_use]
+    pub const fn new(representation: IdentityRepresentation, rows: usize, prefixes: usize) -> Self {
+        Self {
+            representation,
+            rows,
+            prefixes,
+        }
+    }
+
+    /// Returns the representation arm selected by the enclosing caller.
+    #[must_use]
+    pub const fn representation(self) -> IdentityRepresentation {
+        self.representation
+    }
+
+    /// Returns the exact logical row count.
+    #[must_use]
+    pub const fn rows(self) -> usize {
+        self.rows
+    }
+
+    /// Returns the exact shared-prefix count, or zero for raw rows.
+    #[must_use]
+    pub const fn prefixes(self) -> usize {
+        self.prefixes
+    }
+}
+
 /// Selected scalar identity representation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum IdentityRepresentation {
@@ -254,6 +430,12 @@ pub enum IdentityRepresentation {
     /// one-byte width immediately before the canonical LSB-first packed slot
     /// deltas. Durable framing still needs a registered codec ID and counts.
     SharedPrefixFor,
+    /// Sorted dictionary/index rows plus a base per prefix and packed deltas.
+    ///
+    /// Each row stores `slot - minimum_slot_for_its_prefix`; one canonical
+    /// global width covers those deltas. This keeps random row access O(1)
+    /// while making the frame of reference agree with the prefix dictionary.
+    SharedPrefixDeltaFor,
 }
 
 /// Internal allocation named by an identity-column failure.
@@ -265,10 +447,16 @@ pub enum AllocationTarget {
     PrefixDictionary,
     /// Fixed-width per-row prefix indexes.
     PrefixIndexes,
+    /// Decoder bitmap proving every dictionary entry is referenced.
+    PrefixCoverage,
     /// Six-byte per-row monotone slots.
     Slots,
     /// Canonical FOR-packed monotone-slot bytes.
     ForSlotPayload,
+    /// Six-byte base for every per-prefix delta/FOR frame.
+    DeltaForBases,
+    /// Canonical per-prefix delta/FOR packed bytes.
+    DeltaForSlotPayload,
     /// Complete registry-independent scalar payload bytes.
     EncodedPayload,
 }
@@ -286,6 +474,8 @@ pub enum SizeCalculation {
     SlotPayload,
     /// FOR base, width, and bitpacked slot deltas.
     ForSlotPayload,
+    /// Per-prefix bases, width, and bitpacked slot deltas.
+    DeltaForSlotPayload,
     /// Sum of all shared-prefix components.
     SharedPayload,
     /// Incrementing the distinct-prefix count.
@@ -305,6 +495,43 @@ pub enum IdentityConstructionInvariant {
     EncodedPayloadLength,
     /// The canonical FOR scalar kernel rejected a prevalidated slot plan.
     ForSlotEncoding,
+    /// The canonical per-prefix delta/FOR kernel rejected its slot plan.
+    DeltaForSlotEncoding,
+}
+
+/// Canonical scalar-payload rule rejected by the decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IdentityPayloadInvariant {
+    /// Raw rows must not declare a shared-prefix dictionary.
+    RawPrefixCount,
+    /// A nonempty shared representation needs at least one prefix.
+    SharedPrefixCount,
+    /// A prefix uses bits outside the 20-bit partition domain.
+    PrefixPartitionWidth,
+    /// Prefix dictionary entries are not strictly increasing.
+    PrefixDictionaryOrder,
+    /// A prefix index does not name a dictionary entry.
+    PrefixIndexRange,
+    /// A dictionary entry is not referenced by any row.
+    PrefixDictionaryCoverage,
+    /// Delta/FOR rows do not visit prefixes in dictionary order.
+    DeltaForPrefixOrder,
+    /// Delta/FOR slots decrease within one prefix.
+    DeltaForSlotOrder,
+    /// A fixed-width slot uses bits outside the 44-bit slot domain.
+    SlotWidth,
+    /// A FOR width exceeds the 44-bit slot domain.
+    ForWidth,
+    /// Packed slot bytes have an invalid exact length or nonzero padding.
+    ForPacking,
+    /// A decoded FOR slot exceeds the 44-bit slot domain.
+    ForSlotRange,
+    /// The stored FOR base is not the minimum decoded slot.
+    ForBase,
+    /// The stored packed width is not the minimum canonical width.
+    ForCanonicalWidth,
+    /// A per-prefix base is not the minimum slot for that prefix.
+    DeltaForBase,
 }
 
 /// Checked identity-column construction failure.
@@ -316,6 +543,27 @@ pub enum IdentityColumnError {
         rows: usize,
         /// Caller-selected ceiling.
         limit: usize,
+    },
+    /// A shared-prefix descriptor exceeds the caller's dictionary ceiling.
+    PrefixLimitExceeded {
+        /// Prefix entries declared by the descriptor.
+        prefixes: usize,
+        /// Caller-selected ceiling.
+        limit: usize,
+    },
+    /// Supplied scalar bytes do not have the exact preflighted length.
+    PayloadLengthMismatch {
+        /// Exact byte count derived from the descriptor and scalar metadata.
+        expected: usize,
+        /// Supplied byte count.
+        actual: usize,
+    },
+    /// Scalar bytes violate a representation-specific canonical rule.
+    MalformedPayload {
+        /// First byte associated with the rejected field.
+        byte_offset: usize,
+        /// Stable rejected rule.
+        invariant: IdentityPayloadInvariant,
     },
     /// The selected representation exceeds the scalar-payload ceiling.
     PayloadLimitExceeded {
@@ -372,6 +620,21 @@ impl fmt::Display for IdentityColumnError {
                     "identity column has {rows} rows, limit is {limit}"
                 )
             }
+            Self::PrefixLimitExceeded { prefixes, limit } => write!(
+                formatter,
+                "identity column declares {prefixes} prefixes, limit is {limit}"
+            ),
+            Self::PayloadLengthMismatch { expected, actual } => write!(
+                formatter,
+                "identity scalar payload needs exactly {expected} bytes, got {actual}"
+            ),
+            Self::MalformedPayload {
+                byte_offset,
+                invariant,
+            } => write!(
+                formatter,
+                "identity scalar payload violates {invariant:?} at byte {byte_offset}"
+            ),
             Self::PayloadLimitExceeded {
                 representation,
                 required,
@@ -522,6 +785,11 @@ enum IdentityStorage {
         indexes: PrefixIndexes,
         slots: ForSlots,
     },
+    SharedPrefixDeltaFor {
+        prefixes: Vec<IdentityPrefix>,
+        indexes: PrefixIndexes,
+        slots: DeltaForSlots,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -544,10 +812,30 @@ impl ForSlots {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeltaForSlots {
+    bases: Vec<[u8; SLOT_BYTES]>,
+    width: u8,
+    row_count: usize,
+    packed_deltas: Vec<u8>,
+}
+
+impl DeltaForSlots {
+    fn get(&self, prefix_index: usize, row: usize) -> Option<u64> {
+        if row >= self.row_count {
+            return None;
+        }
+        let base = slot_from_be_bytes(*self.bases.get(prefix_index)?);
+        let delta = packed_value_at(&self.packed_deltas, row, self.width)?;
+        base.checked_add(delta).filter(|slot| *slot <= MAX_SLOT)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SlotRepresentationPolicy {
     FixedOnly,
     ForEligible,
+    DeltaForEligible,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -559,10 +847,18 @@ struct ForSlotPlan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeltaForSlotPlan {
+    width: u8,
+    packed_len: usize,
+    payload_len: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectedRepresentation {
     Raw,
     Fixed { payload_len: usize },
     For { plan: ForSlotPlan },
+    DeltaFor { plan: DeltaForSlotPlan },
 }
 
 /// Bounded in-memory identity column retaining arbitrary row order.
@@ -604,7 +900,7 @@ impl<T: ElementIdentity> IdentityColumn<T> {
             })?;
         let minimum_shared_payload = match slot_policy {
             SlotRepresentationPolicy::FixedOnly => fixed_minimum_shared_payload,
-            SlotRepresentationPolicy::ForEligible => {
+            SlotRepresentationPolicy::ForEligible | SlotRepresentationPolicy::DeltaForEligible => {
                 fixed_minimum_shared_payload.min(PREFIX_BYTES + FOR_SLOT_METADATA_BYTES)
             }
         };
@@ -648,9 +944,15 @@ impl<T: ElementIdentity> IdentityColumn<T> {
         };
         let for_plan = match slot_policy {
             SlotRepresentationPolicy::FixedOnly => None,
-            SlotRepresentationPolicy::ForEligible => {
+            SlotRepresentationPolicy::ForEligible | SlotRepresentationPolicy::DeltaForEligible => {
                 for_slot_plan(values, prefixes.len(), index_width)?
             }
+        };
+        let delta_for_plan = match slot_policy {
+            SlotRepresentationPolicy::DeltaForEligible => {
+                delta_for_slot_plan(values, prefixes.len(), index_width)?
+            }
+            SlotRepresentationPolicy::FixedOnly | SlotRepresentationPolicy::ForEligible => None,
         };
 
         let mut selected = SelectedRepresentation::Raw;
@@ -667,12 +969,21 @@ impl<T: ElementIdentity> IdentityColumn<T> {
             selected = SelectedRepresentation::For { plan };
             selected_len = plan.payload_len;
         }
+        if let Some(plan) = delta_for_plan
+            && plan.payload_len < selected_len
+        {
+            selected = SelectedRepresentation::DeltaFor { plan };
+            selected_len = plan.payload_len;
+        }
 
         if selected_len > limits.max_payload_bytes() {
             let representation = match selected {
                 SelectedRepresentation::Raw => IdentityRepresentation::Raw128,
                 SelectedRepresentation::Fixed { .. } => IdentityRepresentation::SharedPrefixFixed,
                 SelectedRepresentation::For { .. } => IdentityRepresentation::SharedPrefixFor,
+                SelectedRepresentation::DeltaFor { .. } => {
+                    IdentityRepresentation::SharedPrefixDeltaFor
+                }
             };
             return Err(IdentityColumnError::PayloadLimitExceeded {
                 representation,
@@ -688,6 +999,9 @@ impl<T: ElementIdentity> IdentityColumn<T> {
             }
             SelectedRepresentation::For { plan } => {
                 Self::try_shared_for(values, prefixes, index_width, plan)
+            }
+            SelectedRepresentation::DeltaFor { plan } => {
+                Self::try_shared_delta_for(values, prefixes, index_width, plan)
             }
         }
     }
@@ -808,6 +1122,106 @@ impl<T: ElementIdentity> IdentityColumn<T> {
         })
     }
 
+    fn try_shared_delta_for(
+        values: &[T],
+        prefixes: Vec<IdentityPrefix>,
+        index_width: usize,
+        plan: DeltaForSlotPlan,
+    ) -> Result<Self, IdentityColumnError> {
+        let mut indexes = allocate_indexes(index_width, values.len())?;
+        let mut bases = Vec::new();
+        bases.try_reserve_exact(prefixes.len()).map_err(|_| {
+            IdentityColumnError::AllocationFailed {
+                target: AllocationTarget::DeltaForBases,
+                requested: prefixes.len(),
+            }
+        })?;
+
+        let mut previous_parts: Option<IdentityParts> = None;
+        let mut previous_prefix_index: Option<usize> = None;
+        for value in values {
+            let parts = IdentityParts::unpack(value.identity_bits());
+            let prefix = IdentityPrefix::from_parts(parts);
+            let index = prefixes.binary_search(&prefix).map_err(|_| {
+                IdentityColumnError::ConstructionInvariantViolation {
+                    invariant: IdentityConstructionInvariant::PrefixDictionaryMembership,
+                }
+            })?;
+            if previous_prefix_index != Some(index) {
+                if index != bases.len() {
+                    return Err(IdentityColumnError::ConstructionInvariantViolation {
+                        invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+                    });
+                }
+                bases.push(slot_be_bytes(parts.monotone_slot()));
+            } else if previous_parts
+                .is_some_and(|previous| previous.monotone_slot() > parts.monotone_slot())
+            {
+                return Err(IdentityColumnError::ConstructionInvariantViolation {
+                    invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+                });
+            }
+            push_index(&mut indexes, index)?;
+            previous_parts = Some(parts);
+            previous_prefix_index = Some(index);
+        }
+        if bases.len() != prefixes.len() {
+            return Err(IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+            });
+        }
+
+        let delta_at = |row: usize| {
+            let Some(value) = values.get(row) else {
+                return 0;
+            };
+            let Some(prefix_index) = indexes.get(row) else {
+                return 0;
+            };
+            let Some(base) = bases.get(prefix_index) else {
+                return 0;
+            };
+            let slot = IdentityParts::unpack(value.identity_bits()).monotone_slot();
+            let base = slot_from_be_bytes(*base);
+            debug_assert!(slot >= base, "validated prefix base exceeds row slot");
+            slot.saturating_sub(base)
+        };
+        let packed_deltas =
+            bitpack::encode_by_index(values.len(), plan.width, delta_at).map_err(|error| {
+                match error {
+                    bitpack::BitpackError::AllocationFailed { requested, .. } => {
+                        IdentityColumnError::AllocationFailed {
+                            target: AllocationTarget::DeltaForSlotPayload,
+                            requested,
+                        }
+                    }
+                    _ => IdentityColumnError::ConstructionInvariantViolation {
+                        invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+                    },
+                }
+            })?;
+        if packed_deltas.len() != plan.packed_len {
+            return Err(IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::EncodedPayloadLength,
+            });
+        }
+
+        Ok(Self {
+            storage: IdentityStorage::SharedPrefixDeltaFor {
+                prefixes,
+                indexes,
+                slots: DeltaForSlots {
+                    bases,
+                    width: plan.width,
+                    row_count: values.len(),
+                    packed_deltas,
+                },
+            },
+            encoded_payload_len: plan.payload_len,
+            identity_type: PhantomData,
+        })
+    }
+
     fn try_raw(
         values: &[T],
         raw_payload_len: usize,
@@ -843,6 +1257,7 @@ impl<T: ElementIdentity> IdentityColumn<T> {
             IdentityStorage::Raw128(rows) => rows.len(),
             IdentityStorage::SharedPrefixFixed { slots, .. } => slots.len(),
             IdentityStorage::SharedPrefixFor { slots, .. } => slots.row_count,
+            IdentityStorage::SharedPrefixDeltaFor { slots, .. } => slots.row_count,
         }
     }
 
@@ -859,7 +1274,20 @@ impl<T: ElementIdentity> IdentityColumn<T> {
             IdentityStorage::Raw128(_) => IdentityRepresentation::Raw128,
             IdentityStorage::SharedPrefixFixed { .. } => IdentityRepresentation::SharedPrefixFixed,
             IdentityStorage::SharedPrefixFor { .. } => IdentityRepresentation::SharedPrefixFor,
+            IdentityStorage::SharedPrefixDeltaFor { .. } => {
+                IdentityRepresentation::SharedPrefixDeltaFor
+            }
         }
+    }
+
+    /// Returns the exact out-of-band scalar descriptor for this payload.
+    #[must_use]
+    pub fn descriptor(&self) -> IdentityColumnDescriptor {
+        IdentityColumnDescriptor::new(
+            self.representation(),
+            self.len(),
+            self.prefix_dictionary().map_or(0, <[IdentityPrefix]>::len),
+        )
     }
 
     /// Returns the exact scalar-payload size used by the chooser.
@@ -922,6 +1350,18 @@ impl<T: ElementIdentity> IdentityColumn<T> {
                 output.push(slots.width);
                 output.extend_from_slice(&slots.packed_deltas);
             }
+            IdentityStorage::SharedPrefixDeltaFor {
+                prefixes,
+                indexes,
+                slots,
+            } => {
+                append_prefixes_and_indexes(&mut output, prefixes, indexes);
+                for base in &slots.bases {
+                    output.extend_from_slice(base);
+                }
+                output.push(slots.width);
+                output.extend_from_slice(&slots.packed_deltas);
+            }
         }
         if output.len() != self.encoded_payload_len {
             return Err(IdentityColumnError::ConstructionInvariantViolation {
@@ -931,13 +1371,48 @@ impl<T: ElementIdentity> IdentityColumn<T> {
         Ok(output)
     }
 
+    /// Decodes one exact registry-independent scalar payload.
+    ///
+    /// Row, dictionary, and byte ceilings are checked before allocation.
+    /// `descriptor` is deliberately out of band: this scalar layer does not
+    /// assign a durable representation tag or frame counts. The decoder
+    /// rejects nonminimal widths/bases, nonzero packed padding, unused or
+    /// unordered dictionary entries, truncated input, and trailing bytes.
+    pub fn try_from_scalar_payload(
+        input: &[u8],
+        descriptor: IdentityColumnDescriptor,
+        limits: IdentityColumnLimits,
+    ) -> Result<Self, IdentityColumnError> {
+        validate_decode_limits(input, descriptor, limits)?;
+
+        let storage = match descriptor.representation() {
+            IdentityRepresentation::Raw128 => decode_raw_storage(input, descriptor.rows())?,
+            IdentityRepresentation::SharedPrefixFixed => {
+                decode_shared_fixed_storage(input, descriptor.rows(), descriptor.prefixes())?
+            }
+            IdentityRepresentation::SharedPrefixFor => {
+                decode_shared_for_storage(input, descriptor.rows(), descriptor.prefixes())?
+            }
+            IdentityRepresentation::SharedPrefixDeltaFor => {
+                decode_shared_delta_for_storage(input, descriptor.rows(), descriptor.prefixes())?
+            }
+        };
+
+        Ok(Self {
+            storage,
+            encoded_payload_len: input.len(),
+            identity_type: PhantomData,
+        })
+    }
+
     /// Returns the sorted unique shared dictionary, or `None` for raw rows.
     #[must_use]
     pub fn prefix_dictionary(&self) -> Option<&[IdentityPrefix]> {
         match &self.storage {
             IdentityStorage::Raw128(_) => None,
             IdentityStorage::SharedPrefixFixed { prefixes, .. }
-            | IdentityStorage::SharedPrefixFor { prefixes, .. } => Some(prefixes),
+            | IdentityStorage::SharedPrefixFor { prefixes, .. }
+            | IdentityStorage::SharedPrefixDeltaFor { prefixes, .. } => Some(prefixes),
         }
     }
 
@@ -947,7 +1422,8 @@ impl<T: ElementIdentity> IdentityColumn<T> {
         match &self.storage {
             IdentityStorage::Raw128(_) => 0,
             IdentityStorage::SharedPrefixFixed { indexes, .. }
-            | IdentityStorage::SharedPrefixFor { indexes, .. } => indexes.width(),
+            | IdentityStorage::SharedPrefixFor { indexes, .. }
+            | IdentityStorage::SharedPrefixDeltaFor { indexes, .. } => indexes.width(),
         }
     }
 
@@ -972,6 +1448,15 @@ impl<T: ElementIdentity> IdentityColumn<T> {
             } => {
                 let prefix = *prefixes.get(indexes.get(row)?)?;
                 prefix.with_slot(slots.get(row)?)
+            }
+            IdentityStorage::SharedPrefixDeltaFor {
+                prefixes,
+                indexes,
+                slots,
+            } => {
+                let prefix_index = indexes.get(row)?;
+                let prefix = *prefixes.get(prefix_index)?;
+                prefix.with_slot(slots.get(prefix_index, row)?)
             }
         };
         Some(T::from_identity_bits(bits))
@@ -1015,6 +1500,21 @@ impl<T: ElementIdentity> IdentityColumn<T> {
                 let row_prefix = *prefixes.get(indexes.get(row)?)?;
                 let probe_prefix = IdentityPrefix::from_parts(probe);
                 let row_slot = slots.get(row)?;
+                Some(
+                    row_prefix
+                        .cmp(&probe_prefix)
+                        .then_with(|| row_slot.cmp(&probe.monotone_slot())),
+                )
+            }
+            IdentityStorage::SharedPrefixDeltaFor {
+                prefixes,
+                indexes,
+                slots,
+            } => {
+                let prefix_index = indexes.get(row)?;
+                let row_prefix = *prefixes.get(prefix_index)?;
+                let probe_prefix = IdentityPrefix::from_parts(probe);
+                let row_slot = slots.get(prefix_index, row)?;
                 Some(
                     row_prefix
                         .cmp(&probe_prefix)
@@ -1104,6 +1604,37 @@ impl<T: ElementIdentity> SortedIdentityColumn<T> {
         })
     }
 
+    /// Validates monotone order and admits per-prefix delta/FOR slots.
+    ///
+    /// In addition to the fixed and global-FOR candidates, this chooser gives
+    /// every dictionary prefix its own minimum slot base and packs each row's
+    /// nonnegative delta under one minimal width. Exact ties retain the earlier
+    /// representation candidate, so representation selection is deterministic.
+    pub fn try_new_with_delta_for_slots(
+        values: &[T],
+        limits: IdentityColumnLimits,
+    ) -> Result<Self, IdentityColumnError> {
+        validate_sorted_values(values, limits)?;
+        Ok(Self {
+            column: IdentityColumn::try_new_with_policy(
+                values,
+                limits,
+                SlotRepresentationPolicy::DeltaForEligible,
+            )?,
+        })
+    }
+
+    /// Decodes a scalar payload and validates monotone typed identity order.
+    pub fn try_from_scalar_payload(
+        input: &[u8],
+        descriptor: IdentityColumnDescriptor,
+        limits: IdentityColumnLimits,
+    ) -> Result<Self, IdentityColumnError> {
+        let column = IdentityColumn::try_from_scalar_payload(input, descriptor, limits)?;
+        validate_sorted_column(&column)?;
+        Ok(Self { column })
+    }
+
     /// Returns the first row whose identity is not less than `probe`.
     #[must_use]
     pub fn lower_bound(&self, probe: T) -> usize {
@@ -1177,6 +1708,30 @@ fn validate_sorted_values<T: ElementIdentity>(
     Ok(())
 }
 
+fn validate_sorted_column<T: ElementIdentity>(
+    column: &IdentityColumn<T>,
+) -> Result<(), IdentityColumnError> {
+    let mut previous: Option<[u8; RAW_ID_BYTES]> = None;
+    for row in 0..column.len() {
+        let current = column.canonical_key_at(row).ok_or(
+            IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::EncodedPayloadLength,
+            },
+        )?;
+        if let Some(previous_key) = previous
+            && previous_key > current
+        {
+            return Err(IdentityColumnError::NotSorted {
+                index: row,
+                previous: previous_key,
+                current,
+            });
+        }
+        previous = Some(current);
+    }
+    Ok(())
+}
+
 fn validate_row_limit(
     rows: usize,
     limits: IdentityColumnLimits,
@@ -1188,6 +1743,623 @@ fn validate_row_limit(
         });
     }
     Ok(())
+}
+
+fn validate_decode_limits(
+    input: &[u8],
+    descriptor: IdentityColumnDescriptor,
+    limits: IdentityColumnLimits,
+) -> Result<(), IdentityColumnError> {
+    validate_row_limit(descriptor.rows(), limits)?;
+    if descriptor.prefixes() > limits.max_prefixes() {
+        return Err(IdentityColumnError::PrefixLimitExceeded {
+            prefixes: descriptor.prefixes(),
+            limit: limits.max_prefixes(),
+        });
+    }
+    if input.len() > limits.max_payload_bytes() {
+        return Err(IdentityColumnError::PayloadLimitExceeded {
+            representation: descriptor.representation(),
+            required: input.len(),
+            limit: limits.max_payload_bytes(),
+        });
+    }
+
+    match descriptor.representation() {
+        IdentityRepresentation::Raw128 if descriptor.prefixes() != 0 => {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: 0,
+                invariant: IdentityPayloadInvariant::RawPrefixCount,
+            });
+        }
+        IdentityRepresentation::Raw128 => {}
+        IdentityRepresentation::SharedPrefixFixed
+        | IdentityRepresentation::SharedPrefixFor
+        | IdentityRepresentation::SharedPrefixDeltaFor
+            if descriptor.rows() == 0
+                || descriptor.prefixes() == 0
+                || descriptor.prefixes() > descriptor.rows()
+                || prefix_index_width(descriptor.prefixes()).is_none() =>
+        {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: 0,
+                invariant: IdentityPayloadInvariant::SharedPrefixCount,
+            });
+        }
+        IdentityRepresentation::SharedPrefixFixed
+        | IdentityRepresentation::SharedPrefixFor
+        | IdentityRepresentation::SharedPrefixDeltaFor => {}
+    }
+    Ok(())
+}
+
+fn decode_raw_storage(input: &[u8], rows: usize) -> Result<IdentityStorage, IdentityColumnError> {
+    let expected = raw_payload_len(rows)?;
+    validate_exact_payload_len(input, expected)?;
+
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(rows)
+        .map_err(|_| IdentityColumnError::AllocationFailed {
+            target: AllocationTarget::RawRows,
+            requested: rows,
+        })?;
+    for row in 0..rows {
+        let offset = row
+            .checked_mul(RAW_ID_BYTES)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::RawPayload,
+            })?;
+        let bytes = read_array::<RAW_ID_BYTES>(input, offset).ok_or(
+            IdentityColumnError::PayloadLengthMismatch {
+                expected,
+                actual: input.len(),
+            },
+        )?;
+        values.push(u128::from_be_bytes(bytes));
+    }
+    Ok(IdentityStorage::Raw128(values))
+}
+
+fn decode_shared_fixed_storage(
+    input: &[u8],
+    rows: usize,
+    prefix_count: usize,
+) -> Result<IdentityStorage, IdentityColumnError> {
+    let expected =
+        shared_payload_len(rows, prefix_count)?.ok_or(IdentityColumnError::MalformedPayload {
+            byte_offset: 0,
+            invariant: IdentityPayloadInvariant::SharedPrefixCount,
+        })?;
+    validate_exact_payload_len(input, expected)?;
+    let (prefixes, indexes, mut cursor) = decode_prefixes_and_indexes(input, rows, prefix_count)?;
+
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(rows)
+        .map_err(|_| IdentityColumnError::AllocationFailed {
+            target: AllocationTarget::Slots,
+            requested: rows,
+        })?;
+    for _ in 0..rows {
+        let slot = read_array::<SLOT_BYTES>(input, cursor).ok_or(
+            IdentityColumnError::PayloadLengthMismatch {
+                expected,
+                actual: input.len(),
+            },
+        )?;
+        if slot[0] & 0xf0 != 0 {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: cursor,
+                invariant: IdentityPayloadInvariant::SlotWidth,
+            });
+        }
+        slots.push(slot);
+        cursor = cursor
+            .checked_add(SLOT_BYTES)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::SlotPayload,
+            })?;
+    }
+    debug_assert_eq!(cursor, input.len());
+    Ok(IdentityStorage::SharedPrefixFixed {
+        prefixes,
+        indexes,
+        slots,
+    })
+}
+
+fn decode_shared_for_storage(
+    input: &[u8],
+    rows: usize,
+    prefix_count: usize,
+) -> Result<IdentityStorage, IdentityColumnError> {
+    let header_len = shared_header_len(rows, prefix_count)?;
+    let metadata_end = header_len.checked_add(FOR_SLOT_METADATA_BYTES).ok_or(
+        IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::ForSlotPayload,
+        },
+    )?;
+    if input.len() < metadata_end {
+        return Err(IdentityColumnError::PayloadLengthMismatch {
+            expected: metadata_end,
+            actual: input.len(),
+        });
+    }
+
+    let base_bytes = read_array::<SLOT_BYTES>(input, header_len).ok_or(
+        IdentityColumnError::PayloadLengthMismatch {
+            expected: metadata_end,
+            actual: input.len(),
+        },
+    )?;
+    if base_bytes[0] & 0xf0 != 0 {
+        return Err(IdentityColumnError::MalformedPayload {
+            byte_offset: header_len,
+            invariant: IdentityPayloadInvariant::ForSlotRange,
+        });
+    }
+    let base = slot_from_be_bytes(base_bytes);
+    let width_offset = header_len + SLOT_BYTES;
+    let width = *input
+        .get(width_offset)
+        .ok_or(IdentityColumnError::PayloadLengthMismatch {
+            expected: metadata_end,
+            actual: input.len(),
+        })?;
+    validate_for_width(width, width_offset)?;
+    let packed_len =
+        bitpack::expected_byte_len(rows, width).map_err(|_| IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::ForSlotPayload,
+        })?;
+    let expected =
+        metadata_end
+            .checked_add(packed_len)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::ForSlotPayload,
+            })?;
+    validate_exact_payload_len(input, expected)?;
+
+    let packed = input
+        .get(metadata_end..)
+        .ok_or(IdentityColumnError::PayloadLengthMismatch {
+            expected,
+            actual: input.len(),
+        })?;
+    validate_packed_slots(packed, rows, width, metadata_end)?;
+    let (prefixes, indexes, cursor) = decode_prefixes_and_indexes(input, rows, prefix_count)?;
+    debug_assert_eq!(cursor, header_len);
+
+    let mut minimum_delta = u64::MAX;
+    let mut maximum_delta = 0_u64;
+    for row in 0..rows {
+        let delta =
+            packed_value_at(packed, row, width).ok_or(IdentityColumnError::MalformedPayload {
+                byte_offset: metadata_end,
+                invariant: IdentityPayloadInvariant::ForPacking,
+            })?;
+        minimum_delta = minimum_delta.min(delta);
+        maximum_delta = maximum_delta.max(delta);
+        if base.checked_add(delta).is_none_or(|slot| slot > MAX_SLOT) {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: metadata_end,
+                invariant: IdentityPayloadInvariant::ForSlotRange,
+            });
+        }
+    }
+    if minimum_delta != 0 {
+        return Err(IdentityColumnError::MalformedPayload {
+            byte_offset: header_len,
+            invariant: IdentityPayloadInvariant::ForBase,
+        });
+    }
+    validate_canonical_for_width(width, maximum_delta, width_offset)?;
+
+    Ok(IdentityStorage::SharedPrefixFor {
+        prefixes,
+        indexes,
+        slots: ForSlots {
+            base,
+            width,
+            row_count: rows,
+            packed_deltas: try_copy_payload(packed, AllocationTarget::ForSlotPayload)?,
+        },
+    })
+}
+
+fn decode_shared_delta_for_storage(
+    input: &[u8],
+    rows: usize,
+    prefix_count: usize,
+) -> Result<IdentityStorage, IdentityColumnError> {
+    let header_len = shared_header_len(rows, prefix_count)?;
+    let base_bytes_len =
+        prefix_count
+            .checked_mul(SLOT_BYTES)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::DeltaForSlotPayload,
+            })?;
+    let width_offset =
+        header_len
+            .checked_add(base_bytes_len)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::DeltaForSlotPayload,
+            })?;
+    let metadata_end = width_offset.checked_add(DELTA_FOR_WIDTH_BYTES).ok_or(
+        IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::DeltaForSlotPayload,
+        },
+    )?;
+    if input.len() < metadata_end {
+        return Err(IdentityColumnError::PayloadLengthMismatch {
+            expected: metadata_end,
+            actual: input.len(),
+        });
+    }
+
+    let width = *input
+        .get(width_offset)
+        .ok_or(IdentityColumnError::PayloadLengthMismatch {
+            expected: metadata_end,
+            actual: input.len(),
+        })?;
+    validate_for_width(width, width_offset)?;
+    let packed_len =
+        bitpack::expected_byte_len(rows, width).map_err(|_| IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::DeltaForSlotPayload,
+        })?;
+    let expected =
+        metadata_end
+            .checked_add(packed_len)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::DeltaForSlotPayload,
+            })?;
+    validate_exact_payload_len(input, expected)?;
+
+    let packed = input
+        .get(metadata_end..)
+        .ok_or(IdentityColumnError::PayloadLengthMismatch {
+            expected,
+            actual: input.len(),
+        })?;
+    validate_packed_slots(packed, rows, width, metadata_end)?;
+
+    let (prefixes, indexes, cursor) = decode_prefixes_and_indexes(input, rows, prefix_count)?;
+    debug_assert_eq!(cursor, header_len);
+    let mut bases = Vec::new();
+    bases
+        .try_reserve_exact(prefix_count)
+        .map_err(|_| IdentityColumnError::AllocationFailed {
+            target: AllocationTarget::DeltaForBases,
+            requested: prefix_count,
+        })?;
+    let mut base_cursor = header_len;
+    for _ in 0..prefix_count {
+        let base = read_array::<SLOT_BYTES>(input, base_cursor).ok_or(
+            IdentityColumnError::PayloadLengthMismatch {
+                expected,
+                actual: input.len(),
+            },
+        )?;
+        if base[0] & 0xf0 != 0 {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: base_cursor,
+                invariant: IdentityPayloadInvariant::ForSlotRange,
+            });
+        }
+        bases.push(base);
+        base_cursor =
+            base_cursor
+                .checked_add(SLOT_BYTES)
+                .ok_or(IdentityColumnError::SizeOverflow {
+                    calculation: SizeCalculation::DeltaForSlotPayload,
+                })?;
+    }
+    debug_assert_eq!(base_cursor, width_offset);
+
+    let index_offset =
+        prefix_count
+            .checked_mul(PREFIX_BYTES)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::PrefixPayload,
+            })?;
+    let index_width = indexes.width();
+    let mut previous_prefix_index: Option<usize> = None;
+    let mut previous_slot: Option<u64> = None;
+    let mut maximum_delta = 0_u64;
+    for row in 0..rows {
+        let prefix_index = indexes
+            .get(row)
+            .ok_or(IdentityColumnError::MalformedPayload {
+                byte_offset: index_offset,
+                invariant: IdentityPayloadInvariant::PrefixIndexRange,
+            })?;
+        let row_offset = index_offset
+            .checked_add(
+                row.checked_mul(index_width)
+                    .ok_or(IdentityColumnError::SizeOverflow {
+                        calculation: SizeCalculation::PrefixIndexPayload,
+                    })?,
+            )
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::PrefixIndexPayload,
+            })?;
+        if previous_prefix_index.is_some_and(|previous| previous > prefix_index) {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: row_offset,
+                invariant: IdentityPayloadInvariant::DeltaForPrefixOrder,
+            });
+        }
+        let base = slot_from_be_bytes(*bases.get(prefix_index).ok_or(
+            IdentityColumnError::MalformedPayload {
+                byte_offset: row_offset,
+                invariant: IdentityPayloadInvariant::PrefixIndexRange,
+            },
+        )?);
+        let delta =
+            packed_value_at(packed, row, width).ok_or(IdentityColumnError::MalformedPayload {
+                byte_offset: metadata_end,
+                invariant: IdentityPayloadInvariant::ForPacking,
+            })?;
+        let slot = base
+            .checked_add(delta)
+            .filter(|slot| *slot <= MAX_SLOT)
+            .ok_or(IdentityColumnError::MalformedPayload {
+                byte_offset: metadata_end,
+                invariant: IdentityPayloadInvariant::ForSlotRange,
+            })?;
+        if previous_prefix_index != Some(prefix_index) {
+            if delta != 0 {
+                return Err(IdentityColumnError::MalformedPayload {
+                    byte_offset: base_cursor_for(prefix_index, header_len)?,
+                    invariant: IdentityPayloadInvariant::DeltaForBase,
+                });
+            }
+            previous_slot = Some(slot);
+        } else if previous_slot.is_some_and(|previous| previous > slot) {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: metadata_end,
+                invariant: IdentityPayloadInvariant::DeltaForSlotOrder,
+            });
+        } else {
+            previous_slot = Some(slot);
+        }
+        previous_prefix_index = Some(prefix_index);
+        maximum_delta = maximum_delta.max(delta);
+    }
+    validate_canonical_for_width(width, maximum_delta, width_offset)?;
+
+    Ok(IdentityStorage::SharedPrefixDeltaFor {
+        prefixes,
+        indexes,
+        slots: DeltaForSlots {
+            bases,
+            width,
+            row_count: rows,
+            packed_deltas: try_copy_payload(packed, AllocationTarget::DeltaForSlotPayload)?,
+        },
+    })
+}
+
+fn decode_prefixes_and_indexes(
+    input: &[u8],
+    rows: usize,
+    prefix_count: usize,
+) -> Result<(Vec<IdentityPrefix>, PrefixIndexes, usize), IdentityColumnError> {
+    let header_len = shared_header_len(rows, prefix_count)?;
+    if input.len() < header_len {
+        return Err(IdentityColumnError::PayloadLengthMismatch {
+            expected: header_len,
+            actual: input.len(),
+        });
+    }
+    let prefix_bytes =
+        prefix_count
+            .checked_mul(PREFIX_BYTES)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::PrefixPayload,
+            })?;
+
+    let mut prefixes = Vec::new();
+    prefixes.try_reserve_exact(prefix_count).map_err(|_| {
+        IdentityColumnError::AllocationFailed {
+            target: AllocationTarget::PrefixDictionary,
+            requested: prefix_count,
+        }
+    })?;
+    for prefix_index in 0..prefix_count {
+        let offset =
+            prefix_index
+                .checked_mul(PREFIX_BYTES)
+                .ok_or(IdentityColumnError::SizeOverflow {
+                    calculation: SizeCalculation::PrefixPayload,
+                })?;
+        let bytes = read_array::<PREFIX_BYTES>(input, offset).ok_or(
+            IdentityColumnError::PayloadLengthMismatch {
+                expected: header_len,
+                actual: input.len(),
+            },
+        )?;
+        if bytes[8] & 0xf0 != 0 {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: offset + 8,
+                invariant: IdentityPayloadInvariant::PrefixPartitionWidth,
+            });
+        }
+        let prefix = IdentityPrefix { bytes };
+        if prefixes
+            .last()
+            .is_some_and(|previous: &IdentityPrefix| *previous >= prefix)
+        {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: offset,
+                invariant: IdentityPayloadInvariant::PrefixDictionaryOrder,
+            });
+        }
+        prefixes.push(prefix);
+    }
+
+    let index_width =
+        prefix_index_width(prefix_count).ok_or(IdentityColumnError::MalformedPayload {
+            byte_offset: prefix_bytes,
+            invariant: IdentityPayloadInvariant::SharedPrefixCount,
+        })?;
+    let mut indexes = allocate_indexes(index_width, rows)?;
+    let mut coverage = Vec::new();
+    coverage.try_reserve_exact(prefix_count).map_err(|_| {
+        IdentityColumnError::AllocationFailed {
+            target: AllocationTarget::PrefixCoverage,
+            requested: prefix_count,
+        }
+    })?;
+    coverage.resize(prefix_count, false);
+    for row in 0..rows {
+        let row_bytes = row
+            .checked_mul(index_width)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::PrefixIndexPayload,
+            })?;
+        let offset =
+            prefix_bytes
+                .checked_add(row_bytes)
+                .ok_or(IdentityColumnError::SizeOverflow {
+                    calculation: SizeCalculation::PrefixIndexPayload,
+                })?;
+        let index = match index_width {
+            0 => 0,
+            1 => usize::from(*input.get(offset).ok_or(
+                IdentityColumnError::PayloadLengthMismatch {
+                    expected: header_len,
+                    actual: input.len(),
+                },
+            )?),
+            2 => usize::from(u16::from_le_bytes(read_array::<2>(input, offset).ok_or(
+                IdentityColumnError::PayloadLengthMismatch {
+                    expected: header_len,
+                    actual: input.len(),
+                },
+            )?)),
+            4 => usize::try_from(u32::from_le_bytes(read_array::<4>(input, offset).ok_or(
+                IdentityColumnError::PayloadLengthMismatch {
+                    expected: header_len,
+                    actual: input.len(),
+                },
+            )?))
+            .map_err(|_| IdentityColumnError::MalformedPayload {
+                byte_offset: offset,
+                invariant: IdentityPayloadInvariant::PrefixIndexRange,
+            })?,
+            _ => {
+                return Err(IdentityColumnError::ConstructionInvariantViolation {
+                    invariant: IdentityConstructionInvariant::PrefixIndexWidth,
+                });
+            }
+        };
+        let Some(covered) = coverage.get_mut(index) else {
+            return Err(IdentityColumnError::MalformedPayload {
+                byte_offset: offset,
+                invariant: IdentityPayloadInvariant::PrefixIndexRange,
+            });
+        };
+        *covered = true;
+        push_index(&mut indexes, index)?;
+    }
+    if let Some(unused) = coverage.iter().position(|covered| !covered) {
+        return Err(IdentityColumnError::MalformedPayload {
+            byte_offset: unused * PREFIX_BYTES,
+            invariant: IdentityPayloadInvariant::PrefixDictionaryCoverage,
+        });
+    }
+    Ok((prefixes, indexes, header_len))
+}
+
+fn shared_header_len(rows: usize, prefixes: usize) -> Result<usize, IdentityColumnError> {
+    let index_width =
+        prefix_index_width(prefixes).ok_or(IdentityColumnError::MalformedPayload {
+            byte_offset: 0,
+            invariant: IdentityPayloadInvariant::SharedPrefixCount,
+        })?;
+    prefixes
+        .checked_mul(PREFIX_BYTES)
+        .and_then(|prefix_bytes| {
+            rows.checked_mul(index_width)
+                .and_then(|index_bytes| prefix_bytes.checked_add(index_bytes))
+        })
+        .ok_or(IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::SharedPayload,
+        })
+}
+
+fn validate_exact_payload_len(input: &[u8], expected: usize) -> Result<(), IdentityColumnError> {
+    if input.len() != expected {
+        return Err(IdentityColumnError::PayloadLengthMismatch {
+            expected,
+            actual: input.len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_for_width(width: u8, byte_offset: usize) -> Result<(), IdentityColumnError> {
+    if width > SLOT_BITS as u8 {
+        return Err(IdentityColumnError::MalformedPayload {
+            byte_offset,
+            invariant: IdentityPayloadInvariant::ForWidth,
+        });
+    }
+    Ok(())
+}
+
+fn validate_packed_slots(
+    input: &[u8],
+    rows: usize,
+    width: u8,
+    byte_offset: usize,
+) -> Result<(), IdentityColumnError> {
+    bitpack::validate_canonical_input(input, rows, width).map_err(|_| {
+        IdentityColumnError::MalformedPayload {
+            byte_offset,
+            invariant: IdentityPayloadInvariant::ForPacking,
+        }
+    })
+}
+
+fn validate_canonical_for_width(
+    width: u8,
+    maximum_delta: u64,
+    byte_offset: usize,
+) -> Result<(), IdentityColumnError> {
+    if width != required_bits(maximum_delta) {
+        return Err(IdentityColumnError::MalformedPayload {
+            byte_offset,
+            invariant: IdentityPayloadInvariant::ForCanonicalWidth,
+        });
+    }
+    Ok(())
+}
+
+fn try_copy_payload(
+    input: &[u8],
+    target: AllocationTarget,
+) -> Result<Vec<u8>, IdentityColumnError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(input.len())
+        .map_err(|_| IdentityColumnError::AllocationFailed {
+            target,
+            requested: input.len(),
+        })?;
+    output.extend_from_slice(input);
+    Ok(output)
+}
+
+fn base_cursor_for(prefix_index: usize, header_len: usize) -> Result<usize, IdentityColumnError> {
+    prefix_index
+        .checked_mul(SLOT_BYTES)
+        .and_then(|offset| header_len.checked_add(offset))
+        .ok_or(IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::DeltaForSlotPayload,
+        })
 }
 
 fn raw_payload_len(rows: usize) -> Result<usize, IdentityColumnError> {
@@ -1277,6 +2449,108 @@ fn for_slot_plan<T: ElementIdentity>(
 
     Ok(Some(ForSlotPlan {
         base,
+        width,
+        packed_len,
+        payload_len,
+    }))
+}
+
+fn delta_for_slot_plan<T: ElementIdentity>(
+    values: &[T],
+    prefixes: usize,
+    index_width: usize,
+) -> Result<Option<DeltaForSlotPlan>, IdentityColumnError> {
+    if values.is_empty() || values.len() > bitpack::MAX_DECODED_VALUES {
+        return Ok(None);
+    }
+
+    let mut current_prefix: Option<IdentityPrefix> = None;
+    let mut current_base = 0_u64;
+    let mut previous_slot = 0_u64;
+    let mut prefix_groups = 0_usize;
+    let mut maximum_delta = 0_u64;
+    for value in values {
+        let parts = IdentityParts::unpack(value.identity_bits());
+        let prefix = IdentityPrefix::from_parts(parts);
+        let slot = parts.monotone_slot();
+        match current_prefix {
+            None => {
+                current_prefix = Some(prefix);
+                current_base = slot;
+                previous_slot = slot;
+                prefix_groups = 1;
+            }
+            Some(previous_prefix) if previous_prefix == prefix => {
+                if slot < previous_slot {
+                    return Err(IdentityColumnError::ConstructionInvariantViolation {
+                        invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+                    });
+                }
+                previous_slot = slot;
+            }
+            Some(previous_prefix) if previous_prefix < prefix => {
+                current_prefix = Some(prefix);
+                current_base = slot;
+                previous_slot = slot;
+                prefix_groups =
+                    prefix_groups
+                        .checked_add(1)
+                        .ok_or(IdentityColumnError::SizeOverflow {
+                            calculation: SizeCalculation::PrefixCount,
+                        })?;
+            }
+            Some(_) => {
+                return Err(IdentityColumnError::ConstructionInvariantViolation {
+                    invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+                });
+            }
+        }
+        maximum_delta = maximum_delta.max(slot - current_base);
+    }
+    if prefix_groups != prefixes {
+        return Err(IdentityColumnError::ConstructionInvariantViolation {
+            invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+        });
+    }
+
+    let width = required_bits(maximum_delta);
+    let packed_len =
+        bitpack::expected_byte_len(values.len(), width).map_err(|error| match error {
+            bitpack::BitpackError::ByteLengthOverflow { .. } => IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::DeltaForSlotPayload,
+            },
+            _ => IdentityColumnError::ConstructionInvariantViolation {
+                invariant: IdentityConstructionInvariant::DeltaForSlotEncoding,
+            },
+        })?;
+    let prefix_bytes =
+        prefixes
+            .checked_mul(PREFIX_BYTES)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::PrefixPayload,
+            })?;
+    let index_bytes =
+        values
+            .len()
+            .checked_mul(index_width)
+            .ok_or(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::PrefixIndexPayload,
+            })?;
+    let base_bytes = prefixes
+        .checked_mul(SLOT_BYTES)
+        .ok_or(IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::DeltaForSlotPayload,
+        })?;
+    let payload_len = prefix_bytes
+        .checked_add(index_bytes)
+        .and_then(|partial| partial.checked_add(base_bytes))
+        .and_then(|partial| partial.checked_add(DELTA_FOR_WIDTH_BYTES))
+        .and_then(|partial| partial.checked_add(packed_len))
+        .ok_or(IdentityColumnError::SizeOverflow {
+            calculation: SizeCalculation::DeltaForSlotPayload,
+        })?;
+
+    Ok(Some(DeltaForSlotPlan {
         width,
         packed_len,
         payload_len,
@@ -1421,6 +2695,11 @@ fn packed_value_at(input: &[u8], row: usize, width: u8) -> Option<u64> {
     Some(decoded)
 }
 
+fn read_array<const N: usize>(input: &[u8], offset: usize) -> Option<[u8; N]> {
+    let end = offset.checked_add(N)?;
+    input.get(offset..end)?.try_into().ok()
+}
+
 const fn slot_be_bytes(slot: u64) -> [u8; SLOT_BYTES] {
     [
         (slot >> 40) as u8,
@@ -1478,6 +2757,31 @@ mod tests {
             .collect()
     }
 
+    fn assert_scalar_round_trip<T>(column: &IdentityColumn<T>, limits: IdentityColumnLimits)
+    where
+        T: ElementIdentity + fmt::Debug,
+    {
+        let payload = column
+            .try_scalar_payload(limits.max_payload_bytes())
+            .unwrap();
+        let decoded =
+            IdentityColumn::<T>::try_from_scalar_payload(&payload, column.descriptor(), limits)
+                .unwrap();
+        assert_eq!(&decoded, column);
+        assert_eq!(decoded.descriptor(), column.descriptor());
+        assert_eq!(
+            decoded.try_scalar_payload(payload.len()).unwrap(),
+            payload,
+            "decode must preserve the unique scalar bytes"
+        );
+    }
+
+    fn delta_for_values() -> Vec<VId> {
+        let mut values = (0..128).map(|slot| vid(3, 5, slot)).collect::<Vec<_>>();
+        values.extend((0..128).map(|offset| vid(4, 7, MAX_SLOT - 127 + offset)));
+        values
+    }
+
     #[test]
     fn parts_pin_bit_boundaries_and_reject_wider_components() {
         let minimum = parts(0, 0, 0);
@@ -1501,6 +2805,73 @@ mod tests {
             Err(IdentityPartsError::SlotOutOfRange {
                 actual: MAX_SLOT + 1,
                 maximum: MAX_SLOT,
+            })
+        );
+    }
+
+    #[test]
+    fn origin_birth_order_key_round_trips_and_preserves_complete_tuple_order() {
+        let commits = [0, 1, u64::MAX];
+        let intent_ordinals = [0, 1, u64::MAX];
+        let merge_ordinals = [0, 1, u64::MAX];
+        let element_ids = [
+            vid(0, 0, 0),
+            vid(1, 0, 0),
+            vid(1, 1, 0),
+            vid(1, 1, 1),
+            vid(u64::MAX, MAX_PARTITION, MAX_SLOT),
+        ];
+        let mut values = Vec::new();
+        for commit_seq in commits {
+            for intent_ordinal in intent_ordinals {
+                for merge_ordinal in merge_ordinals {
+                    for element_id in element_ids {
+                        values.push(OriginBirthOrder::new(
+                            CommitSeq(commit_seq),
+                            intent_ordinal,
+                            merge_ordinal,
+                            element_id,
+                        ));
+                    }
+                }
+            }
+        }
+
+        for (left_index, left) in values.iter().enumerate() {
+            assert_eq!(
+                OriginBirthOrder::<VId>::try_from_canonical_be_key(&left.canonical_be_key()),
+                Ok(*left)
+            );
+            for (right_index, right) in values.iter().enumerate() {
+                assert_eq!(
+                    left.cmp(right),
+                    left.canonical_be_key().cmp(&right.canonical_be_key()),
+                    "origin tuple/key order differs at ({left_index}, {right_index})"
+                );
+            }
+        }
+
+        let edge = OriginBirthOrder::new(CommitSeq(9), 8, 7, eid(6, 5, 4));
+        assert_eq!(
+            OriginBirthOrder::<EId>::try_from_canonical_be_key(&edge.canonical_be_key()),
+            Ok(edge)
+        );
+        assert_eq!(
+            OriginBirthOrder::<EId>::try_from_canonical_be_key(
+                &edge.canonical_be_key()[..ORIGIN_BIRTH_ORDER_KEY_BYTES - 1]
+            ),
+            Err(OriginBirthOrderDecodeError::LengthMismatch {
+                expected: ORIGIN_BIRTH_ORDER_KEY_BYTES,
+                actual: ORIGIN_BIRTH_ORDER_KEY_BYTES - 1,
+            })
+        );
+        let mut trailing = edge.canonical_be_key().to_vec();
+        trailing.push(0);
+        assert_eq!(
+            OriginBirthOrder::<EId>::try_from_canonical_be_key(&trailing),
+            Err(OriginBirthOrderDecodeError::LengthMismatch {
+                expected: ORIGIN_BIRTH_ORDER_KEY_BYTES,
+                actual: ORIGIN_BIRTH_ORDER_KEY_BYTES + 1,
             })
         );
     }
@@ -1924,6 +3295,462 @@ mod tests {
             &first[..PREFIX_BYTES],
             &shared.prefix_dictionary().unwrap()[0].bytes
         );
+    }
+
+    #[test]
+    fn every_scalar_identity_arm_has_an_exact_bounded_canonical_inverse() {
+        let raw_values = [vid(9, 7, 3), vid(1, 5, 4)];
+        let raw_limits = IdentityColumnLimits::new(raw_values.len(), 0, 64);
+        let raw = IdentityColumn::try_new(&raw_values, raw_limits).unwrap();
+        assert_eq!(raw.representation(), IdentityRepresentation::Raw128);
+        assert_scalar_round_trip(&raw, raw_limits);
+
+        let fixed_values = vids_with_prefix_count(256, 1);
+        let fixed_limits = limits(fixed_values.len(), 1);
+        let fixed = IdentityColumn::try_new(&fixed_values, fixed_limits).unwrap();
+        assert_eq!(
+            fixed.representation(),
+            IdentityRepresentation::SharedPrefixFixed
+        );
+        assert_scalar_round_trip(&fixed, fixed_limits);
+
+        let for_values = (0..32)
+            .map(|slot| eid(11, 23, slot * 17))
+            .collect::<Vec<_>>();
+        let for_limits = limits(for_values.len(), 1);
+        let global_for =
+            SortedIdentityColumn::try_new_with_for_slots(&for_values, for_limits).unwrap();
+        assert_eq!(
+            global_for.as_column().representation(),
+            IdentityRepresentation::SharedPrefixFor
+        );
+        assert_scalar_round_trip(global_for.as_column(), for_limits);
+        let global_payload = global_for
+            .as_column()
+            .try_scalar_payload(usize::MAX)
+            .unwrap();
+        let decoded_sorted = SortedIdentityColumn::<EId>::try_from_scalar_payload(
+            &global_payload,
+            global_for.as_column().descriptor(),
+            for_limits,
+        )
+        .unwrap();
+        assert_eq!(decoded_sorted.iter().collect::<Vec<_>>(), for_values);
+
+        let delta_values = delta_for_values();
+        let delta_limits = limits(delta_values.len(), 2);
+        let delta_for =
+            SortedIdentityColumn::try_new_with_delta_for_slots(&delta_values, delta_limits)
+                .unwrap();
+        assert_eq!(
+            delta_for.as_column().representation(),
+            IdentityRepresentation::SharedPrefixDeltaFor
+        );
+        assert_scalar_round_trip(delta_for.as_column(), delta_limits);
+        let delta_payload = delta_for
+            .as_column()
+            .try_scalar_payload(usize::MAX)
+            .unwrap();
+        let decoded_sorted = SortedIdentityColumn::<VId>::try_from_scalar_payload(
+            &delta_payload,
+            delta_for.as_column().descriptor(),
+            delta_limits,
+        )
+        .unwrap();
+        assert_eq!(decoded_sorted.iter().collect::<Vec<_>>(), delta_values);
+    }
+
+    #[test]
+    fn per_prefix_delta_for_is_smaller_and_preserves_random_access_and_search() {
+        let values = delta_for_values();
+        let limits = limits(values.len(), 2);
+        let global = SortedIdentityColumn::try_new_with_for_slots(&values, limits).unwrap();
+        let delta = SortedIdentityColumn::try_new_with_delta_for_slots(&values, limits).unwrap();
+
+        assert_eq!(
+            global.as_column().representation(),
+            IdentityRepresentation::SharedPrefixFor
+        );
+        assert_eq!(
+            delta.as_column().representation(),
+            IdentityRepresentation::SharedPrefixDeltaFor
+        );
+        assert_eq!(
+            delta.as_column().encoded_payload_len(),
+            2 * PREFIX_BYTES
+                + values.len()
+                + 2 * SLOT_BYTES
+                + DELTA_FOR_WIDTH_BYTES
+                + bitpack::expected_byte_len(values.len(), 7).unwrap()
+        );
+        assert!(delta.as_column().encoded_payload_len() < global.as_column().encoded_payload_len());
+        assert_eq!(delta.iter().collect::<Vec<_>>(), values);
+        for (row, value) in values.iter().enumerate() {
+            assert_eq!(delta.get(row), Some(*value));
+            assert_eq!(
+                delta.as_column().canonical_key_at(row),
+                Some(value.0.to_be_bytes())
+            );
+        }
+        for probe in [
+            vid(3, 5, 0),
+            vid(3, 5, 64),
+            vid(3, 5, 128),
+            vid(4, 7, MAX_SLOT - 128),
+            vid(4, 7, MAX_SLOT),
+        ] {
+            assert_eq!(
+                delta.lower_bound(probe),
+                values.partition_point(|value| *value < probe)
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_decoder_enforces_resource_bounds_before_input_work() {
+        let raw = IdentityColumnDescriptor::new(IdentityRepresentation::Raw128, 2, 0);
+        assert_eq!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &[],
+                raw,
+                IdentityColumnLimits::new(1, 0, usize::MAX)
+            ),
+            Err(IdentityColumnError::RowLimitExceeded { rows: 2, limit: 1 })
+        );
+
+        let shared = IdentityColumnDescriptor::new(IdentityRepresentation::SharedPrefixFixed, 2, 2);
+        assert_eq!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &[],
+                shared,
+                IdentityColumnLimits::new(2, 1, usize::MAX)
+            ),
+            Err(IdentityColumnError::PrefixLimitExceeded {
+                prefixes: 2,
+                limit: 1,
+            })
+        );
+
+        assert_eq!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &[0; RAW_ID_BYTES],
+                IdentityColumnDescriptor::new(IdentityRepresentation::Raw128, 1, 0),
+                IdentityColumnLimits::new(1, 0, RAW_ID_BYTES - 1)
+            ),
+            Err(IdentityColumnError::PayloadLimitExceeded {
+                representation: IdentityRepresentation::Raw128,
+                required: RAW_ID_BYTES,
+                limit: RAW_ID_BYTES - 1,
+            })
+        );
+
+        assert_eq!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &[],
+                IdentityColumnDescriptor::new(IdentityRepresentation::Raw128, usize::MAX, 0,),
+                IdentityColumnLimits::new(usize::MAX, 0, usize::MAX)
+            ),
+            Err(IdentityColumnError::SizeOverflow {
+                calculation: SizeCalculation::RawPayload,
+            })
+        );
+
+        let rows_above_scalar_ceiling = bitpack::MAX_DECODED_VALUES + 1;
+        let mut zero_width_payload = [0_u8; PREFIX_BYTES + FOR_SLOT_METADATA_BYTES];
+        zero_width_payload[8] = 0xf0;
+        for representation in [
+            IdentityRepresentation::SharedPrefixFor,
+            IdentityRepresentation::SharedPrefixDeltaFor,
+        ] {
+            assert_eq!(
+                IdentityColumn::<VId>::try_from_scalar_payload(
+                    &zero_width_payload,
+                    IdentityColumnDescriptor::new(representation, rows_above_scalar_ceiling, 1),
+                    IdentityColumnLimits::new(
+                        rows_above_scalar_ceiling,
+                        1,
+                        zero_width_payload.len(),
+                    ),
+                ),
+                Err(IdentityColumnError::MalformedPayload {
+                    byte_offset: zero_width_payload.len(),
+                    invariant: IdentityPayloadInvariant::ForPacking,
+                }),
+                "{representation:?} must reject the scalar row ceiling before dictionary validation"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_decoder_rejects_invalid_descriptors_lengths_and_sorted_claims() {
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &[],
+                IdentityColumnDescriptor::new(IdentityRepresentation::Raw128, 0, 1),
+                limits(1, 1),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::RawPrefixCount,
+                ..
+            })
+        ));
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &[],
+                IdentityColumnDescriptor::new(IdentityRepresentation::SharedPrefixFixed, 0, 0,),
+                limits(0, 0),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::SharedPrefixCount,
+                ..
+            })
+        ));
+
+        let raw_values = [vid(9, 7, 3), vid(1, 5, 4)];
+        let raw = IdentityColumn::try_new(
+            &raw_values,
+            IdentityColumnLimits::new(raw_values.len(), 0, usize::MAX),
+        )
+        .unwrap();
+        let payload = raw.try_scalar_payload(usize::MAX).unwrap();
+        assert_eq!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &payload[..payload.len() - 1],
+                raw.descriptor(),
+                limits(raw_values.len(), 0),
+            ),
+            Err(IdentityColumnError::PayloadLengthMismatch {
+                expected: payload.len(),
+                actual: payload.len() - 1,
+            })
+        );
+        let mut trailing = payload.clone();
+        trailing.push(0);
+        assert_eq!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &trailing,
+                raw.descriptor(),
+                limits(raw_values.len(), 0),
+            ),
+            Err(IdentityColumnError::PayloadLengthMismatch {
+                expected: payload.len(),
+                actual: payload.len() + 1,
+            })
+        );
+        assert!(matches!(
+            SortedIdentityColumn::<VId>::try_from_scalar_payload(
+                &payload,
+                raw.descriptor(),
+                limits(raw_values.len(), 0),
+            ),
+            Err(IdentityColumnError::NotSorted { index: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn scalar_decoder_rejects_hostile_dictionary_index_and_slot_bytes() {
+        let fixed_values = vids_with_prefix_count(256, 1);
+        let fixed = IdentityColumn::try_new(&fixed_values, limits(fixed_values.len(), 1)).unwrap();
+        let fixed_payload = fixed.try_scalar_payload(usize::MAX).unwrap();
+
+        let mut wide_partition = fixed_payload.clone();
+        wide_partition[8] |= 0x10;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &wide_partition,
+                fixed.descriptor(),
+                limits(fixed_values.len(), 1),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::PrefixPartitionWidth,
+                ..
+            })
+        ));
+
+        let mut wide_slot = fixed_payload;
+        wide_slot[PREFIX_BYTES] |= 0x10;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &wide_slot,
+                fixed.descriptor(),
+                limits(fixed_values.len(), 1),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::SlotWidth,
+                ..
+            })
+        ));
+
+        let delta_values = delta_for_values();
+        let delta = SortedIdentityColumn::try_new_with_delta_for_slots(
+            &delta_values,
+            limits(delta_values.len(), 2),
+        )
+        .unwrap();
+        let delta_descriptor = delta.as_column().descriptor();
+        let delta_payload = delta.as_column().try_scalar_payload(usize::MAX).unwrap();
+
+        let mut duplicate_prefix = delta_payload.clone();
+        duplicate_prefix.copy_within(0..PREFIX_BYTES, PREFIX_BYTES);
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &duplicate_prefix,
+                delta_descriptor,
+                limits(delta_values.len(), 2),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::PrefixDictionaryOrder,
+                ..
+            })
+        ));
+
+        let index_start = 2 * PREFIX_BYTES;
+        let mut out_of_range_index = delta_payload.clone();
+        out_of_range_index[index_start] = 2;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &out_of_range_index,
+                delta_descriptor,
+                limits(delta_values.len(), 2),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::PrefixIndexRange,
+                ..
+            })
+        ));
+
+        let mut unused_prefix = delta_payload;
+        unused_prefix[index_start..index_start + delta_values.len()].fill(0);
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &unused_prefix,
+                delta_descriptor,
+                limits(delta_values.len(), 2),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::PrefixDictionaryCoverage,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn scalar_decoder_rejects_noncanonical_global_for_metadata_and_bits() {
+        let values = [vid(11, 23, 10), vid(11, 23, 11)];
+        let column =
+            SortedIdentityColumn::try_new_with_for_slots(&values, limits(values.len(), 1)).unwrap();
+        assert_eq!(
+            column.as_column().representation(),
+            IdentityRepresentation::SharedPrefixFor
+        );
+        let descriptor = column.as_column().descriptor();
+        let payload = column.as_column().try_scalar_payload(usize::MAX).unwrap();
+        let width_offset = PREFIX_BYTES + SLOT_BYTES;
+        let packed_offset = width_offset + 1;
+
+        let mut invalid_width = payload.clone();
+        invalid_width[width_offset] = SLOT_BITS as u8 + 1;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &invalid_width,
+                descriptor,
+                limits(values.len(), 1),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::ForWidth,
+                ..
+            })
+        ));
+
+        let mut nonzero_padding = payload.clone();
+        nonzero_padding[packed_offset] |= 0x80;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &nonzero_padding,
+                descriptor,
+                limits(values.len(), 1),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::ForPacking,
+                ..
+            })
+        ));
+
+        let mut nonminimum_base = payload.clone();
+        nonminimum_base[packed_offset] = 0b11;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &nonminimum_base,
+                descriptor,
+                limits(values.len(), 1),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::ForBase,
+                ..
+            })
+        ));
+
+        let mut nonminimum_width = payload;
+        nonminimum_width[width_offset] = 2;
+        nonminimum_width[packed_offset] = 0b0100;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(
+                &nonminimum_width,
+                descriptor,
+                limits(values.len(), 1),
+            ),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::ForCanonicalWidth,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn scalar_decoder_rejects_noncanonical_delta_for_grouping_bases_and_order() {
+        let values = delta_for_values();
+        let limits = limits(values.len(), 2);
+        let column = SortedIdentityColumn::try_new_with_delta_for_slots(&values, limits).unwrap();
+        let descriptor = column.as_column().descriptor();
+        let payload = column.as_column().try_scalar_payload(usize::MAX).unwrap();
+        let index_start = 2 * PREFIX_BYTES;
+        let packed_offset = index_start + values.len() + 2 * SLOT_BYTES + DELTA_FOR_WIDTH_BYTES;
+
+        let mut decreasing_prefix = payload.clone();
+        decreasing_prefix[index_start] = 1;
+        decreasing_prefix[index_start + 1] = 0;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(&decreasing_prefix, descriptor, limits,),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::DeltaForPrefixOrder,
+                ..
+            })
+        ));
+
+        let mut nonminimum_base = payload.clone();
+        nonminimum_base[packed_offset] |= 1;
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(&nonminimum_base, descriptor, limits,),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::DeltaForBase,
+                ..
+            })
+        ));
+
+        let mut deltas = (0..128).collect::<Vec<u64>>();
+        deltas.extend(0..128);
+        deltas[1] = 2;
+        deltas[2] = 1;
+        let nonmonotone_packed = bitpack::encode(&deltas, 7).unwrap();
+        let mut nonmonotone_slots = payload;
+        nonmonotone_slots[packed_offset..].copy_from_slice(&nonmonotone_packed);
+        assert!(matches!(
+            IdentityColumn::<VId>::try_from_scalar_payload(&nonmonotone_slots, descriptor, limits,),
+            Err(IdentityColumnError::MalformedPayload {
+                invariant: IdentityPayloadInvariant::DeltaForSlotOrder,
+                ..
+            })
+        ));
     }
 
     #[test]

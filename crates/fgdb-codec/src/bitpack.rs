@@ -389,6 +389,28 @@ pub(crate) fn reserve_encoded_output(expected: usize) -> Result<Vec<u8>, Bitpack
     Ok(output)
 }
 
+/// Packs a deterministic exact-size random-access value source.
+///
+/// The accessor is evaluated in ascending index order during validation and
+/// again during packing. Internal callers must return the same value for an
+/// index in both passes.
+pub(crate) fn encode_by_index<ValueAt>(
+    count: usize,
+    width: u8,
+    value_at: ValueAt,
+) -> Result<Vec<u8>, BitpackError>
+where
+    ValueAt: Fn(usize) -> u64,
+{
+    let expected = bounded_expected_byte_len(count, width)?;
+    validate_values_by_index(count, width, &value_at)?;
+
+    let mut output = reserve_encoded_output(expected)?;
+    output.resize(expected, 0);
+    pack_validated_by_index(count, width, &value_at, &mut output)?;
+    Ok(output)
+}
+
 /// FOR-encodes a deterministic exact-size random-access value source.
 ///
 /// The accessor is evaluated in ascending index order during validation and
@@ -438,6 +460,15 @@ where
     Ok(output)
 }
 
+pub(crate) fn validate_canonical_input(
+    input: &[u8],
+    count: usize,
+    width: u8,
+) -> Result<(), BitpackError> {
+    let expected = bounded_expected_byte_len(count, width)?;
+    validate_input(input, count, width, expected)
+}
+
 fn validate_input(
     input: &[u8],
     count: usize,
@@ -485,6 +516,53 @@ fn pack_validated(values: &[u64], width: u8, output: &mut [u8]) -> Result<(), Bi
     let mut bit_cursor = 0_usize;
     for &value in values {
         pack_value(value, values.len(), width, output, &mut bit_cursor)?;
+    }
+    Ok(())
+}
+
+fn validate_values_by_index<ValueAt>(
+    count: usize,
+    width: u8,
+    value_at: &ValueAt,
+) -> Result<(), BitpackError>
+where
+    ValueAt: Fn(usize) -> u64,
+{
+    debug_assert!(width <= MAX_BIT_WIDTH);
+    if width == MAX_BIT_WIDTH {
+        return Ok(());
+    }
+
+    let exclusive_limit = 1_u64 << width;
+    for index in 0..count {
+        let value = value_at(index);
+        if value >= exclusive_limit {
+            return Err(BitpackError::ValueOutOfRange {
+                index,
+                value,
+                width,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn pack_validated_by_index<ValueAt>(
+    count: usize,
+    width: u8,
+    value_at: &ValueAt,
+    output: &mut [u8],
+) -> Result<(), BitpackError>
+where
+    ValueAt: Fn(usize) -> u64,
+{
+    if width == 0 {
+        return Ok(());
+    }
+
+    let mut bit_cursor = 0_usize;
+    for index in 0..count {
+        pack_value(value_at(index), count, width, output, &mut bit_cursor)?;
     }
     Ok(())
 }

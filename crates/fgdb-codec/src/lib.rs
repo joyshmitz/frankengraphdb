@@ -4,7 +4,8 @@
 //! delta-varint, checked bitpacking/frame-of-reference and Elias-Fano kernels,
 //! deterministic block compression, roaring-style sets, the honest closed
 //! neighbor-codec family, type-safe identity-column mechanics, scalar dispatch
-//! traits, and structured diagnostic evidence. Durable codec identifiers,
+//! traits, immutable origin-order keys, canonical bounded identity-payload
+//! decode, and structured diagnostic evidence. Durable codec identifiers,
 //! envelopes, logical-digest recipes, and SIMD implementations remain owned by
 //! their still-gated format and unsafe-boundary work.
 
